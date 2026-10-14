@@ -1,4 +1,4 @@
-# One-click deploy: https://render.com/deploy?repo=<your-repo-url>
+# One-click deploy: https://render.com/deploy?repo=https://github.com/sanjaysaini383/paypal
 services:
   - type: web
     name: cartpilot

@@ -12,7 +12,7 @@ An AI shopping agent that researches, builds your cart and checks out with PayPa
 
 ## Links
 - Live demo: `<your Render URL>`
-- Source: `<your GitHub URL>` (MIT licensed)
+- Source: https://github.com/sanjaysaini383/paypal (MIT licensed)
 - Video: `<your YouTube URL>` (under 3 minutes)
 
 ---

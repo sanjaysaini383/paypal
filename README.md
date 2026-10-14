@@ -81,7 +81,7 @@ flowchart LR
 Requires Node.js 20+.
 
 ```bash
-git clone <this repo> && cd cartpilot
+git clone https://github.com/sanjaysaini383/paypal.git cartpilot && cd cartpilot
 npm install
 cp .env.example .env       # optional: add keys (see below)
 npm start                  # http://localhost:3000
