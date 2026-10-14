@@ -13,7 +13,10 @@ export const PRESETS = {
   groq: {
     baseUrl: "https://api.groq.com/openai/v1",
     keyEnv: "GROQ_API_KEY",
-    model: "openai/gpt-oss-120b",
+    // Qwen plans multi-tool turns far better than gpt-oss here (parallel
+    // searches, fewer loops); thinking off keeps latency and tokens down.
+    model: "qwen/qwen3.8-27b",
+    reasoningEffort: "none",
   },
   openrouter: {
     baseUrl: "https://openrouter.ai/api/v1",

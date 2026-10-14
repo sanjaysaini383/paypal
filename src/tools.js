@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { audit, newId, spentThisMonth, VERIFIED_MERCHANTS } from "./store.js";
-import { checkCart, priceCart } from "./policy.js";
+import { checkCart, priceCart, TAX_RATE } from "./policy.js";
 import * as paypal from "./paypal.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -247,6 +247,9 @@ export const EXECUTORS = {
       shipping: cart.shipping,
       total: cart.total,
       violations,
+      ...(violations.some((v) => v.over_by)
+        ? { hint: `Remove or swap items worth at least $${Math.max(...violations.map((v) => v.over_by || 0)).toFixed(2)} including ${(TAX_RATE * 100).toFixed(2)}% tax.` }
+        : {}),
     };
   },
 

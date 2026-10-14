@@ -39,10 +39,18 @@ export function checkCart(session, lines, totals) {
       violations.push({ rule: "quantity_cap", sku: l.sku, message: `Quantity ${l.qty} of ${l.name} looks unusual (max 10 per item).` });
   }
   if (totals.total > p.perOrderLimit)
-    violations.push({ rule: "per_order_limit", message: `Order total $${totals.total.toFixed(2)} exceeds your per-order limit of $${p.perOrderLimit}.` });
+    violations.push({
+      rule: "per_order_limit",
+      message: `Order total $${totals.total.toFixed(2)} exceeds your per-order limit of $${p.perOrderLimit}.`,
+      over_by: round2(totals.total - p.perOrderLimit),
+    });
   const remaining = round2(p.monthlyBudget - spentThisMonth(session));
   if (totals.total > remaining)
-    violations.push({ rule: "monthly_budget", message: `Order total $${totals.total.toFixed(2)} exceeds your remaining monthly budget of $${remaining.toFixed(2)}.` });
+    violations.push({
+      rule: "monthly_budget",
+      message: `Order total $${totals.total.toFixed(2)} exceeds your remaining monthly budget of $${remaining.toFixed(2)}.`,
+      over_by: round2(totals.total - remaining),
+    });
   return violations;
 }
 
