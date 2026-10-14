@@ -165,7 +165,15 @@ function walletStatus(session) {
 export const EXECUTORS = {
   async search_catalog(session, input) {
     if (typeof input.query !== "string") throw new Error("query must be a string");
-    const results = searchCatalog(input);
+    let results = searchCatalog(input);
+    let note;
+    // An over-tight price cap shouldn't send the agent into a search loop:
+    // show the closest matches at any price instead of nothing.
+    if (!results.length && (input.max_price || input.category)) {
+      results = searchCatalog({ query: input.query });
+      if (results.length)
+        note = `Nothing matched ${input.max_price ? `under $${input.max_price}` : ""}${input.category ? ` in ${input.category}` : ""}; these are the closest matches without that filter.`;
+    }
     const flagged = results.filter((r) => r.risk_flags.length);
     audit(session, "agent", "search_catalog", `"${input.query}"${input.category ? ` in ${input.category}` : ""} → ${results.length} results`);
     for (const f of flagged)
@@ -173,6 +181,7 @@ export const EXECUTORS = {
     // Compact rows for the model: fewer tokens per call keeps free-tier
     // providers under their tokens-per-minute limits.
     return {
+      ...(note ? { note } : {}),
       results: results.slice(0, 8).map((r) => ({
         sku: r.sku,
         name: r.name,
