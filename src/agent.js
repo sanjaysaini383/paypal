@@ -2,7 +2,7 @@
 // Groq, OpenRouter), with tool use. With no API key it runs a small
 // rule-based planner over the same tools so the app is still demoable offline.
 import Anthropic from "@anthropic-ai/sdk";
-import { TOOL_DEFS, runTool, queryTerms, CATALOG } from "./tools.js";
+import { TOOL_DEFS, runTool, queryTerms, searchCatalog, CATALOG } from "./tools.js";
 import { TAX_RATE } from "./policy.js";
 import { audit } from "./store.js";
 import { PRESETS, openAIConfig, runOpenAICompatible } from "./llm-openai.js";
@@ -214,11 +214,12 @@ async function runOffline(session, userText, emit) {
 
   const budgetMatch = lower.match(/\$\s?(\d+(?:\.\d+)?)/) || lower.match(/(\d+(?:\.\d+)?)\s?(?:dollars|usd|bucks)/);
   const budget = Math.min(budgetMatch ? Number(budgetMatch[1]) : Infinity, wallet.remaining_budget, wallet.policy.perOrderLimit);
-  const search = await call("search_catalog", { query: userText });
-  const flagged = search.results.filter((p) => p.risk_flags.length);
+  await call("search_catalog", { query: userText });
+  const full = searchCatalog({ query: userText }); // full rows (with relevance) for planning
+  const flagged = full.filter((p) => p.risk_flags.length);
   if (flagged.length) say(`Heads up: I skipped ${flagged.map((f) => `"${f.name}"`).join(", ")} because its listing contains instructions aimed at AI agents.`);
   // Policy is deliberately not pre-filtered here: the server-side guardrails decide.
-  const pool = search.results.filter((p) => !p.risk_flags.length);
+  const pool = full.filter((p) => !p.risk_flags.length);
   const withTax = (p) => p.price * (p.category === "gift_cards" ? 1 : 1 + TAX_RATE);
   const picks = [];
   let rationale;

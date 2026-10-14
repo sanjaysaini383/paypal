@@ -61,8 +61,12 @@ async function complete(cfg, body) {
     });
     if (res.ok) return res.json();
     const text = await res.text();
+    // Groq rejects malformed tool calls (e.g. gpt-oss emitting a garbled tool
+    // name) with 400 tool_use_failed. It's a sampling glitch: just retry.
+    if (res.status === 400 && text.includes("tool_use_failed") && attempt < 3) continue;
     if ((res.status === 429 || res.status === 503) && attempt < 3) {
       const retryAfter = Number(res.headers.get("retry-after"));
+      console.warn(`[${cfg.provider}] ${res.status} rate limited, retry-after=${res.headers.get("retry-after")} (attempt ${attempt + 1})`);
       await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 2000 * 2 ** attempt);
       continue;
     }

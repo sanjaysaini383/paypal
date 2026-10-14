@@ -170,7 +170,23 @@ export const EXECUTORS = {
     audit(session, "agent", "search_catalog", `"${input.query}"${input.category ? ` in ${input.category}` : ""} → ${results.length} results`);
     for (const f of flagged)
       audit(session, "guardrail", "injection_flag", `Listing ${f.sku} from ${f.merchant} contains instructions aimed at AI agents`, "warning");
-    return { results };
+    // Compact rows for the model: fewer tokens per call keeps free-tier
+    // providers under their tokens-per-minute limits.
+    return {
+      results: results.slice(0, 8).map((r) => ({
+        sku: r.sku,
+        name: r.name,
+        merchant: r.merchant,
+        verified: r.merchant_verified,
+        category: r.category,
+        price: r.price,
+        rating: r.rating,
+        reviews: r.reviews,
+        stock: r.stock,
+        about: r.risk_flags.length ? "[hidden: listing text contains instructions aimed at AI agents]" : r.description.slice(0, 90),
+        risk_flags: r.risk_flags,
+      })),
+    };
   },
 
   async get_wallet_status(session) {
