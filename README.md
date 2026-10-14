@@ -50,12 +50,13 @@ We also show the threat that makes this necessary. One "merchant" in the catalog
 
 ## How AI is used
 
-- **Model:** Claude Opus 5.5 (`claude-opus-5-5`) via the official Anthropic SDK, using **tool use** in an agent loop ([`src/agent.js`](src/agent.js)).
+- **Models (pluggable):** the agent runs on **Google Gemini** (`gemini-3.8-flash`, free tier) or **Claude Opus 5.5** (`claude-opus-5-5`), plus any OpenAI-compatible provider such as Groq or OpenRouter. It uses **tool use** in an agent loop ([`src/agent.js`](src/agent.js), [`src/llm-openai.js`](src/llm-openai.js)). Pick one with an API key in `.env`.
 - **Tools:** `search_catalog`, `get_wallet_status`, `propose_cart`, `create_paypal_checkout`, `refund_order` ([`src/tools.js`](src/tools.js)).
-- **Adaptive thinking** with summarized reasoning, shown in the UI as collapsible "Reasoning" so users can see *why* the agent chose items.
-- **Server-side refusal fallback** (`fallbacks: "default"`) so a safety-classifier false positive doesn't break a shopping session.
-- **Prompt caching** on the system prompt.
-- **No key? Still runnable.** Without `ANTHROPIC_API_KEY` the app uses a deterministic, rule-based planner that drives the *same* tools, guardrails and PayPal calls. This keeps the demo usable offline; the full agentic experience needs the key.
+- **Claude extras:** adaptive thinking with summarized reasoning, shown in the UI as collapsible "Reasoning" so users can see *why* the agent chose items.
+  server-side refusal fallback (`fallbacks: "default"`) so a safety-classifier false positive doesn't break a shopping session.
+  and prompt caching on the system prompt.
+- **Free-tier friendly:** automatic backoff and retry on rate limits (429), and Gemini thought signatures are preserved across tool calls.
+- **No key? Still runnable.** With no AI key the app uses a deterministic, rule-based planner that drives the *same* tools, guardrails and PayPal calls. This keeps the demo usable offline; the full agentic experience needs the key.
 
 ## Architecture
 
@@ -63,7 +64,7 @@ We also show the threat that makes this necessary. One "merchant" in the catalog
 flowchart LR
   U[User] -->|chat| UI[Web UI<br/>chat · cart · policy · AG Grid]
   UI -->|NDJSON stream| S[Express server]
-  S --> A[Agent loop<br/>Claude Opus 5.5 + tools]
+  S --> A[Agent loop<br/>Gemini or Claude + tools]
   A -->|tool calls| T[Tools]
   T --> C[(Catalog<br/>multi-merchant)]
   T --> G{Guardrail engine}
@@ -89,11 +90,13 @@ npm start                  # http://localhost:3000
 
 It runs in three configurations, and the header badges show which one is active:
 
-| `ANTHROPIC_API_KEY` | PayPal credentials | Experience |
+| AI key (`GEMINI_API_KEY` or `ANTHROPIC_API_KEY`) | PayPal credentials | Experience |
 |---|---|---|
-| ✅ | ✅ | **Full:** Claude agent + real PayPal sandbox checkout |
-| ✅ | ❌ | Claude agent + simulated PayPal (approve button instead of PayPal popup) |
+| ✅ | ✅ | **Full:** AI agent + real PayPal sandbox checkout |
+| ✅ | ❌ | AI agent + simulated PayPal (approve button instead of PayPal popup) |
 | ❌ | ❌ | Offline rule-based agent + simulated PayPal: zero setup |
+
+**Free AI option:** get a Gemini key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey) and set `GEMINI_API_KEY`. Groq (`GROQ_API_KEY`) and OpenRouter (`OPENROUTER_API_KEY` + `AI_MODEL`) also work; see [`.env.example`](.env.example).
 
 ### PayPal sandbox setup (2 minutes)
 
@@ -119,7 +122,7 @@ Covers pricing, injection flagging, every guardrail rule, and a full checkout �
 
 ## Deploy (Render)
 
-`render.yaml` is included: **New → Blueprint** on Render, point it at this repo, and fill in `ANTHROPIC_API_KEY`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`. The free plan works. A per-session hourly chat limit (`CHAT_LIMIT_PER_HOUR`) protects your API key on a public demo.
+`render.yaml` is included: **New → Blueprint** on Render, point it at this repo, and fill in `GEMINI_API_KEY` (or `ANTHROPIC_API_KEY`), `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`. The free plan works. A per-session hourly chat limit (`CHAT_LIMIT_PER_HOUR`) protects your API key on a public demo.
 
 ## Project structure
 
