@@ -28,8 +28,8 @@ let busy = false;
 async function boot() {
   config = await (await api("/api/config")).json();
   const ai = $("#ai-badge");
-  ai.textContent = config.aiMode === "claude" ? `AI: ${prettyModel(config.model)}` : "AI: offline demo";
-  ai.className = "badge " + (config.aiMode === "claude" ? "live" : "sim");
+  ai.textContent = config.aiMode !== "offline" ? `AI: ${prettyModel(config.model)}` : "AI: offline demo";
+  ai.className = "badge " + (config.aiMode !== "offline" ? "live" : "sim");
   const pp = $("#pp-badge");
   pp.textContent = config.paypalMode === "sandbox" ? "PayPal: Sandbox" : "PayPal: Simulated";
   pp.className = "badge " + (config.paypalMode === "sandbox" ? "live" : "sim");
@@ -46,7 +46,10 @@ async function boot() {
 
 function prettyModel(id) {
   const m = /^claude-(\w+)-(\d+)(?:-(\d+))?$/.exec(id || "");
-  return m ? `Claude ${m[1][0].toUpperCase() + m[1].slice(1)} ${m[2]}${m[3] ? "." + m[3] : ""}` : id;
+  if (m) return `Claude ${m[1][0].toUpperCase() + m[1].slice(1)} ${m[2]}${m[3] ? "." + m[3] : ""}`;
+  // e.g. "gemini-3.8-flash" -> "Gemini 3.8 Flash", "openai/gpt-oss-120b" -> "Gpt Oss 120b"
+  const name = String(id || "").split("/").pop().replace(/:free$/, "");
+  return name.split(/[-_]/).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
 
 async function refresh() {

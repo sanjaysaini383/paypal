@@ -34,7 +34,7 @@ function snapshot(s) {
 }
 
 app.get("/api/config", (req, res) => {
-  res.json({ aiMode, model: aiMode === "claude" ? MODEL : null, paypalMode: paypal.paypalMode, paypalClientId: paypal.paypalClientId, repoUrl: process.env.REPO_URL || null });
+  res.json({ aiMode, model: MODEL, paypalMode: paypal.paypalMode, paypalClientId: paypal.paypalClientId, repoUrl: process.env.REPO_URL || null });
 });
 
 app.get("/api/state", (req, res) => res.json(snapshot(session(req))));
@@ -138,6 +138,7 @@ app.post("/api/orders/:orderId/capture", async (req, res) => {
 app.post("/api/reset", (req, res) => {
   const s = session(req);
   s.messages = [];
+  s.oaMessages = [];
   s.pendingEvents = [];
   s.carts.clear();
   audit(s, "user", "conversation_reset", "Started a new conversation");
@@ -149,6 +150,6 @@ app.get("/healthz", (req, res) => res.send("ok"));
 const port = Number(process.env.PORT || 3000);
 app.listen(port, () => {
   console.log(`CartPilot running on http://localhost:${port}`);
-  console.log(`  AI: ${aiMode === "claude" ? MODEL : "offline rule-based agent (set ANTHROPIC_API_KEY)"}`);
+  console.log(`  AI: ${aiMode === "offline" ? "offline rule-based agent (set GEMINI_API_KEY or ANTHROPIC_API_KEY)" : `${aiMode} · ${MODEL}`}`);
   console.log(`  PayPal: ${paypal.paypalMode}${paypal.paypalMode === "simulated" ? " (set PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET for sandbox)" : ""}`);
 });

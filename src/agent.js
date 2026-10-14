@@ -1,13 +1,28 @@
-// The shopping agent. With ANTHROPIC_API_KEY set it runs Claude with tool use;
-// without one it runs a small rule-based planner over the same tools so the
-// app is still demoable offline.
+// The shopping agent. Runs Claude, or any OpenAI-compatible provider (Gemini,
+// Groq, OpenRouter), with tool use. With no API key it runs a small
+// rule-based planner over the same tools so the app is still demoable offline.
 import Anthropic from "@anthropic-ai/sdk";
 import { TOOL_DEFS, runTool, queryTerms, CATALOG } from "./tools.js";
 import { TAX_RATE } from "./policy.js";
 import { audit } from "./store.js";
+import { PRESETS, openAIConfig, runOpenAICompatible } from "./llm-openai.js";
 
-export const MODEL = process.env.CLAUDE_MODEL || "claude-opus-5-5";
-export const aiMode = process.env.ANTHROPIC_API_KEY ? "claude" : "offline";
+// AI_PROVIDER picks explicitly; otherwise the first key found wins.
+function pickProvider() {
+  const explicit = (process.env.AI_PROVIDER || "").toLowerCase();
+  if (explicit === "claude" || explicit === "offline" || PRESETS[explicit]) return explicit;
+  if (process.env.ANTHROPIC_API_KEY) return "claude";
+  if (process.env.GEMINI_API_KEY) return "gemini";
+  if (process.env.GROQ_API_KEY) return "groq";
+  if (process.env.OPENROUTER_API_KEY) return "openrouter";
+  return "offline";
+}
+
+export const aiMode = pickProvider();
+const oaConfig = PRESETS[aiMode] ? openAIConfig(aiMode) : null;
+if (oaConfig && (!oaConfig.apiKey || !oaConfig.model || !oaConfig.baseUrl))
+  throw new Error(`AI_PROVIDER=${aiMode} needs an API key, a model (AI_MODEL) and a base URL. See .env.example.`);
+export const MODEL = aiMode === "claude" ? process.env.CLAUDE_MODEL || "claude-opus-5-5" : oaConfig?.model || null;
 const client = aiMode === "claude" ? new Anthropic() : null;
 const MAX_STEPS = 14;
 
@@ -38,6 +53,7 @@ export async function runAgent(session, userText, emit) {
   const text = eventsPreamble(session) + userText;
   audit(session, "user", "message", userText.slice(0, 200));
   if (aiMode === "offline") return runOffline(session, userText, emit);
+  if (oaConfig) return runOpenAICompatible(oaConfig, { session, text, system: SYSTEM, maxSteps: MAX_STEPS, summarize, emit });
 
   session.messages.push({ role: "user", content: text });
 
