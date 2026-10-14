@@ -97,15 +97,8 @@ function orderBody(cart) {
         })),
       },
     ],
-    payment_source: {
-      paypal: {
-        experience_context: {
-          brand_name: "CartPilot",
-          shipping_preference: "GET_FROM_FILE",
-          user_action: "PAY_NOW",
-        },
-      },
-    },
+    // No payment_source here: the JS SDK Smart Buttons drive the approval
+    // popup, and they expect a plain CREATED order.
   };
 }
 
