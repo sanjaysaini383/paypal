@@ -190,7 +190,9 @@ a { color: var(--accent); }
 .cart-actions .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .paid-note { background: var(--ok-soft); color: var(--ok); padding: 10px 12px; border-radius: 10px; font-weight: 500; }
 .sim-note { font-size: 12px; color: var(--muted); margin: 0; }
-#paypal-buttons { min-height: 45px; }
+/* PayPal's iframes are light-scheme; matching it avoids the opaque white
+   backdrop browsers paint behind iframes with a different color-scheme. */
+#paypal-buttons { min-height: 45px; color-scheme: light; }
 
 /* ---------- policy */
 .policy { padding: 14px 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
