@@ -140,6 +140,31 @@ export const TOOL_DEFS = [
     },
   },
   {
+    name: "show_products",
+    description:
+      "Show the user a short list of products as visual cards (price, rating, merchant) with Add to cart and Compare buttons. Use it whenever you present options to choose from or compare, or recommend specific items. 2-6 products, each with a one-line note on why it's a good fit. Never include listings flagged as suspicious.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Short heading, e.g. 'Best 2-person tents'." },
+        products: {
+          type: "array",
+          minItems: 1,
+          maxItems: 8,
+          items: {
+            type: "object",
+            properties: {
+              sku: { type: "string" },
+              note: { type: "string", description: "One short line on why this item fits." },
+            },
+            required: ["sku", "note"],
+          },
+        },
+      },
+      required: ["title", "products"],
+    },
+  },
+  {
     name: "propose_policy_change",
     description:
       "Propose a change to the user's spending rules when they state a rule in plain language (e.g. 'never spend more than $50 a month on electronics', 'block gift cards', 'raise my budget to $800'). You cannot change rules yourself: this shows the user a confirmation card and nothing changes until they click Apply. Include only the fields that should change.",
@@ -259,54 +284,36 @@ export const EXECUTORS = {
     };
   },
 
-  async propose_cart(session, input, emit) {
-    if (!Array.isArray(input.items) || input.items.length === 0) throw new Error("items must be a non-empty array");
-    const lines = [];
-    const unknown = [];
-    for (const { sku, qty } of input.items) {
+  async show_products(session, input, emit) {
+    if (!Array.isArray(input.products) || !input.products.length) throw new Error("products must be a non-empty array");
+    const items = [];
+    for (const { sku, note } of input.products.slice(0, 8)) {
       const p = bySku.get(sku);
-      if (!p) {
-        unknown.push(sku);
-        continue;
-      }
-      const q = Math.max(1, Math.floor(Number(qty) || 1));
-      const existing = lines.find((l) => l.sku === sku);
-      if (existing) existing.qty += q;
-      else lines.push({ ...p, qty: q });
+      if (!p) continue;
+      items.push({
+        sku: p.sku,
+        name: p.name,
+        merchant: p.merchant,
+        verified: VERIFIED_MERCHANTS.includes(p.merchant),
+        category: p.category,
+        price: p.price,
+        rating: p.rating,
+        reviews: p.reviews,
+        stock: p.stock,
+        description: INJECTION.test(p.description) ? "" : p.description,
+        flagged: INJECTION.test(p.description),
+        note: String(note || "").slice(0, 160),
+      });
     }
-    if (unknown.length) return { error: `Unknown SKUs: ${unknown.join(", ")}. Use search_catalog to find valid SKUs.` };
+    if (!items.length) return { error: "None of those SKUs exist. Use search_catalog first." };
+    const title = String(input.title || "Options").slice(0, 80);
+    audit(session, "agent", "show_products", `${title}: ${items.map((i) => i.sku).join(", ")}`);
+    emit({ type: "products", title, items });
+    return { shown: items.length, note: "The user sees these as cards with Add to cart and Compare buttons. Keep your reply short; don't repeat every detail." };
+  },
 
-    const totals = priceCart(lines);
-    const violations = checkCart(session, lines, totals);
-    const cart = {
-      id: newId("cart"),
-      items: lines.map(({ sku, name, merchant, category, price, qty, rating }) => ({ sku, name, merchant, category, price, qty, rating })),
-      ...totals,
-      rationale: String(input.rationale || "").slice(0, 600),
-      violations,
-      status: violations.length ? "blocked" : "proposed",
-      createdAt: new Date().toISOString(),
-    };
-    session.carts.set(cart.id, cart);
-    if (violations.length) {
-      audit(session, "guardrail", "cart_blocked", violations.map((v) => v.message).join(" | "), "blocked");
-    } else {
-      audit(session, "agent", "propose_cart", `${cart.items.length} items, $${cart.total.toFixed(2)}`);
-    }
-    emit({ type: "cart", cart });
-    return {
-      cart_id: cart.id,
-      status: cart.status,
-      items: cart.items,
-      subtotal: cart.subtotal,
-      tax: cart.tax,
-      shipping: cart.shipping,
-      total: cart.total,
-      violations,
-      ...(violations.some((v) => v.over_by)
-        ? { hint: `Remove or swap items worth at least $${Math.max(...violations.map((v) => v.over_by || 0)).toFixed(2)} including ${(TAX_RATE * 100).toFixed(2)}% tax.` }
-        : {}),
-    };
+  async propose_cart(session, input, emit) {
+    return buildCart(session, input.items, input.rationale, "agent", emit);
   },
 
   async create_paypal_checkout(session, input, emit) {
@@ -314,6 +321,8 @@ export const EXECUTORS = {
     if (!cart) return { error: "Unknown cart_id." };
     if (cart.status === "checkout") return { error: "Checkout already created for this cart.", paypal_order_id: cart.paypalOrderId };
     if (cart.status === "paid") return { error: "This cart is already paid." };
+    if (cart.status !== "proposed" && cart.status !== "blocked")
+      return { error: `This cart was ${cart.status}. Use the user's current cart (get the latest cart_id from propose_cart).` };
     // Re-check: the budget may have changed since the cart was proposed.
     const violations = checkCart(session, cart.items.map((i) => ({ ...bySku.get(i.sku), qty: i.qty })), cart);
     if (violations.length) {
@@ -370,6 +379,86 @@ export const EXECUTORS = {
     return { refund_id: refund.refundId, status: refund.status, amount: refund.amount, order_status: order.status };
   },
 };
+
+// Shared by the agent's propose_cart tool and the user's own add/remove
+// buttons: every cart, whoever builds it, goes through the same guardrails.
+export function buildCart(session, rawItems, rationale, actor, emit) {
+  if (!Array.isArray(rawItems) || rawItems.length === 0) throw new Error("items must be a non-empty array");
+  const lines = [];
+  const unknown = [];
+  for (const { sku, qty } of rawItems) {
+    const p = bySku.get(sku);
+    if (!p) {
+      unknown.push(sku);
+      continue;
+    }
+    const q = Math.max(1, Math.floor(Number(qty) || 1));
+    const existing = lines.find((l) => l.sku === sku);
+    if (existing) existing.qty += q;
+    else lines.push({ ...p, qty: q });
+  }
+  if (unknown.length) return { error: `Unknown SKUs: ${unknown.join(", ")}. Use search_catalog to find valid SKUs.` };
+
+  // Only the newest open cart is live; an older proposal it replaces is retired.
+  for (const c of session.carts.values()) if (c.status === "proposed" || c.status === "blocked") c.status = "replaced";
+
+  const totals = priceCart(lines);
+  const violations = checkCart(session, lines, totals);
+  const cart = {
+    id: newId("cart"),
+    items: lines.map(({ sku, name, merchant, category, price, qty, rating }) => ({ sku, name, merchant, category, price, qty, rating })),
+    ...totals,
+    rationale: String(rationale || "").slice(0, 600),
+    violations,
+    status: violations.length ? "blocked" : "proposed",
+    createdBy: actor,
+    createdAt: new Date().toISOString(),
+  };
+  session.carts.set(cart.id, cart);
+  if (violations.length) {
+    audit(session, "guardrail", "cart_blocked", violations.map((v) => v.message).join(" | "), "blocked");
+  } else {
+    audit(session, actor, actor === "user" ? "cart_edited" : "propose_cart", `${cart.items.length} items, $${cart.total.toFixed(2)}`);
+  }
+  emit({ type: "cart", cart });
+  return {
+    cart_id: cart.id,
+    status: cart.status,
+    items: cart.items,
+    subtotal: cart.subtotal,
+    tax: cart.tax,
+    shipping: cart.shipping,
+    total: cart.total,
+    violations,
+    ...(violations.some((v) => v.over_by)
+      ? { hint: `Remove or swap items worth at least $${Math.max(...violations.map((v) => v.over_by || 0)).toFixed(2)} including ${(TAX_RATE * 100).toFixed(2)}% tax.` }
+      : {}),
+  };
+}
+
+// The user's own cart edits (product-card "Add" and cart "remove" buttons).
+// They change the newest open cart, or start a new one.
+export function editCart(session, { add, remove }) {
+  const open = [...session.carts.values()].reverse().find((c) => c.status === "proposed" || c.status === "blocked");
+  let items = open ? open.items.map(({ sku, qty }) => ({ sku, qty })) : [];
+  if (add) {
+    if (!bySku.has(add)) return { error: "Unknown product" };
+    const existing = items.find((i) => i.sku === add);
+    if (existing) existing.qty += 1;
+    else items.push({ sku: add, qty: 1 });
+  }
+  if (remove) items = items.filter((i) => i.sku !== remove);
+  if (!items.length) {
+    if (open) open.status = "rejected";
+    audit(session, "user", "cart_cleared", "Removed the last item");
+    return { cleared: true };
+  }
+  // The agent's note may no longer describe the cart once the user edits it.
+  const rationale = open?.createdBy === "agent" || open?.rationale === "Started from the agent's suggestion, edited by you."
+    ? "Started from the agent's suggestion, edited by you."
+    : "Items you picked.";
+  return buildCart(session, items, rationale, "user", () => {});
+}
 
 export async function runTool(session, name, input, emit) {
   const exec = EXECUTORS[name];

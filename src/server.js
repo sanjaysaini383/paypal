@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { getSession, audit, spentThisMonth, categorySpendThisMonth, remember } from "./store.js";
 import { sanitizePolicy, applyPolicyChanges } from "./policy.js";
 import { runAgent, aiMode, MODEL } from "./agent.js";
+import { editCart } from "./tools.js";
 import * as paypal from "./paypal.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -155,6 +156,27 @@ app.post("/api/policy/proposals/:id/:action", (req, res) => {
     return res.status(404).json({ error: "Unknown action" });
   }
   res.json(snapshot(s));
+});
+
+// The user's own cart edits from product cards and the cart panel. They go
+// through the same guardrails as the agent's carts.
+app.post("/api/cart/items", (req, res) => {
+  const s = session(req);
+  const sku = String(req.body?.sku || "");
+  const r = editCart(s, { add: sku });
+  if (r.error) return res.status(400).json({ error: r.error });
+  s.pendingEvents.push(`The user added ${sku} to the cart themselves. Current cart: ${r.cart_id} ($${r.total?.toFixed(2)}, ${r.status}).`);
+  res.json({ result: r, state: snapshot(s) });
+});
+
+app.delete("/api/cart/items/:sku", (req, res) => {
+  const s = session(req);
+  const r = editCart(s, { remove: req.params.sku });
+  if (r.error) return res.status(400).json({ error: r.error });
+  s.pendingEvents.push(
+    r.cleared ? `The user removed ${req.params.sku}; the cart is now empty.` : `The user removed ${req.params.sku} from the cart. Current cart: ${r.cart_id} ($${r.total.toFixed(2)}).`,
+  );
+  res.json({ result: r, state: snapshot(s) });
 });
 
 app.post("/api/carts/:id/reject", (req, res) => {

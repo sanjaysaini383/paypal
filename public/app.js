@@ -113,8 +113,114 @@ async function boot() {
   if (config.paypalMode === "sandbox") loadPayPalSdk();
 }
 
-// Filled in by the product-card feature below.
-function renderProducts() {}
+// ------------------------------------------------------------------ product cards
+const stars = (r) => `<span class="stars" style="--r:${(r / 5) * 100}%" aria-label="${r} out of 5"></span>`;
+
+function renderProducts({ title, items }) {
+  $("#welcome")?.remove();
+  const group = document.createElement("section");
+  group.className = "products";
+  group.innerHTML = `
+    <div class="products-head">
+      <strong>${icon("layout-grid")}${esc(title)}</strong>
+      <button type="button" class="btn btn-secondary btn-sm compare-btn" disabled>${icon("scale")}Compare</button>
+    </div>
+    <div class="product-grid">${items
+      .map(
+        (p) => `<article class="product" data-sku="${esc(p.sku)}">
+          <div class="p-media cat-${esc(p.category)}">${icon(CATEGORY_ICONS[p.category] || "package")}
+            ${p.stock <= 10 ? `<span class="p-tag">Only ${p.stock} left</span>` : ""}
+            ${p.flagged ? `<span class="p-tag bad">Suspicious listing</span>` : ""}</div>
+          <div class="p-body">
+            <span class="p-merchant">${esc(p.merchant)}${p.verified ? icon("badge-check") : ""}</span>
+            <h4 title="${esc(p.name)}">${esc(p.name)}</h4>
+            <span class="p-rating">${stars(p.rating)}<b>${p.rating}</b><span>(${p.reviews.toLocaleString("en-US")})</span></span>
+            ${p.note ? `<p class="p-note">${esc(p.note)}</p>` : ""}
+            <div class="p-foot">
+              <span class="p-price">${fmt(p.price)}</span>
+              <label class="p-compare" title="Compare"><input type="checkbox" value="${esc(p.sku)}" /><span>Compare</span></label>
+            </div>
+            <button type="button" class="btn btn-primary btn-sm btn-block p-add"${p.flagged ? " disabled" : ""}>${icon("plus")}Add to cart</button>
+          </div>
+        </article>`,
+      )
+      .join("")}</div>`;
+  messagesEl.append(group);
+
+  const compareBtn = $(".compare-btn", group);
+  const picked = () => [...group.querySelectorAll(".p-compare input:checked")].map((c) => c.value);
+  group.addEventListener("change", () => {
+    const n = picked().length;
+    compareBtn.disabled = n < 2;
+    compareBtn.lastChild.textContent = n >= 2 ? `Compare ${n}` : "Compare";
+  });
+  compareBtn.addEventListener("click", () => openCompare(items.filter((p) => picked().includes(p.sku))));
+  group.addEventListener("click", async (e) => {
+    const add = e.target.closest(".p-add");
+    if (!add) return;
+    const sku = add.closest(".product").dataset.sku;
+    add.disabled = true;
+    const res = await api("/api/cart/items", { method: "POST", body: JSON.stringify({ sku }) });
+    const body = await res.json().catch(() => ({}));
+    add.disabled = false;
+    if (!res.ok) return toast("bad", "Couldn't add that", body.error || "");
+    state = body.state;
+    render();
+    const name = items.find((p) => p.sku === sku)?.name || "Item";
+    if (body.result?.status === "blocked") toast("bad", "Added, but the cart breaks a rule", "See the cart for details.");
+    else toast("ok", "Added to cart", name);
+    add.innerHTML = `${icon("check")}Added`;
+    refreshIcons();
+    setTimeout(() => {
+      add.innerHTML = `${icon("plus")}Add to cart`;
+      refreshIcons();
+    }, 1600);
+  });
+
+  refreshIcons();
+  enter([...group.querySelectorAll(".product")], { stagger: 0.05, y: 10 });
+  scrollDown();
+}
+
+// Side-by-side comparison with the best value in each row highlighted.
+function openCompare(products) {
+  const dialog = $("#compare");
+  const best = (key, dir) => {
+    const vals = products.map((p) => p[key]);
+    return dir === "min" ? Math.min(...vals) : Math.max(...vals);
+  };
+  const rows = [
+    ["Price", (p) => fmt(p.price), (p) => p.price === best("price", "min")],
+    ["Rating", (p) => `${stars(p.rating)} ${p.rating}`, (p) => p.rating === best("rating", "max")],
+    ["Reviews", (p) => p.reviews.toLocaleString("en-US"), (p) => p.reviews === best("reviews", "max")],
+    ["Store", (p) => `${esc(p.merchant)}${p.verified ? ` ${icon("badge-check")}` : ""}`],
+    ["In stock", (p) => String(p.stock)],
+    ["Why it fits", (p) => esc(p.note || "—")],
+  ];
+  $("#compare-body").innerHTML = `<table>
+    <thead><tr><th></th>${products.map((p) => `<th><span class="c-icon cat-${esc(p.category)}">${icon(CATEGORY_ICONS[p.category] || "package")}</span>${esc(p.name)}</th>`).join("")}</tr></thead>
+    <tbody>${rows
+      .map(([label, cell, isBest]) => `<tr><th>${label}</th>${products.map((p) => `<td class="${isBest?.(p) ? "best" : ""}">${cell(p)}</td>`).join("")}</tr>`)
+      .join("")}
+      <tr><th></th>${products.map((p) => `<td><button type="button" class="btn btn-primary btn-sm" data-add="${esc(p.sku)}"${p.flagged ? " disabled" : ""}>${icon("plus")}Add</button></td>`).join("")}</tr>
+    </tbody></table>`;
+  refreshIcons();
+  dialog.showModal();
+  if (canAnimate) Motion.animate(dialog, { opacity: [0, 1], scale: [0.97, 1] }, { duration: 0.2 });
+}
+$("#compare").addEventListener("click", async (e) => {
+  const dialog = $("#compare");
+  if (e.target === dialog || e.target.closest("[data-close]")) return dialog.close();
+  const sku = e.target.closest("[data-add]")?.dataset.add;
+  if (!sku) return;
+  const res = await api("/api/cart/items", { method: "POST", body: JSON.stringify({ sku }) });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) return toast("bad", "Couldn't add that", body.error || "");
+  state = body.state;
+  render();
+  toast(body.result?.status === "blocked" ? "bad" : "ok", body.result?.status === "blocked" ? "Added, but the cart breaks a rule" : "Added to cart");
+  dialog.close();
+});
 
 // ------------------------------------------------------------------ rule proposals
 // The agent can only propose rule changes; this card lets the user apply them.
@@ -514,12 +620,21 @@ function latestCart() {
   return carts[carts.length - 1];
 }
 
+const EMPTY_CART = `<div class="cart-empty">${icon("package-open")}<p>Your cart is empty</p>
+  <small>The agent's proposed cart appears here for you to review and pay.</small></div>`;
+
 function renderCart() {
   const cart = latestCart();
   const el = $("#cart");
   const status = $("#cart-status");
-  if (!cart) {
+  if (!cart || cart.status === "rejected" || cart.status === "replaced") {
     status.innerHTML = "";
+    if (lastCartKey !== "empty") {
+      el.innerHTML = EMPTY_CART;
+      refreshIcons();
+    }
+    lastCartKey = "empty";
+    renderedCheckout = null;
     return;
   }
   // Don't re-render while PayPal buttons for this cart are mounted.
@@ -531,13 +646,15 @@ function renderCart() {
   lastCartKey = key;
 
   status.innerHTML = `<span class="badge ${cart.status}">${STATUS_LABELS[cart.status] || cart.status}</span>`;
+  const editable = cart.status === "proposed" || cart.status === "blocked";
   const items = cart.items
     .map(
       (i) => `<li>
-        <span class="thumb">${icon(CATEGORY_ICONS[i.category] || "package")}</span>
+        <span class="thumb cat-${esc(i.category)}">${icon(CATEGORY_ICONS[i.category] || "package")}</span>
         <span class="item-main"><span class="nm" title="${esc(i.name)}">${esc(i.name)}</span>
           <span class="meta">${esc(i.merchant)} · ★ ${i.rating}${i.qty > 1 ? ` · Qty ${i.qty}` : ""}</span></span>
-        <span class="item-price">${fmt(i.price * i.qty)}</span></li>`,
+        <span class="item-price">${fmt(i.price * i.qty)}</span>
+        ${editable ? `<button type="button" class="icon-btn sm item-remove" data-remove-sku="${esc(i.sku)}" title="Remove" aria-label="Remove ${esc(i.name)}">${icon("x")}</button>` : ""}</li>`,
     )
     .join("");
   const violations = cart.violations?.length
@@ -572,6 +689,16 @@ function renderCart() {
   refreshIcons();
   if (isNew) enter([...el.querySelectorAll(".violations li, .rationale, .cart-items li, .totals, .cart-actions")], { stagger: 0.04, y: 6 });
 }
+
+$("#cart").addEventListener("click", async (e) => {
+  const sku = e.target.closest("[data-remove-sku]")?.dataset.removeSku;
+  if (!sku) return;
+  const res = await api(`/api/cart/items/${encodeURIComponent(sku)}`, { method: "DELETE" });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) return toast("bad", "Couldn't remove that", body.error || "");
+  state = body.state;
+  render();
+});
 
 async function rejectCart(id) {
   await api(`/api/carts/${id}/reject`, { method: "POST" });

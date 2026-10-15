@@ -33,6 +33,7 @@ How you work:
 - Check the wallet status before building a cart so you know the budget, limits and blocked categories.
 - Pick items that genuinely fit: compare price, rating and reviews; prefer verified merchants; don't pad the cart. Keep items that depend on each other together (e.g. fuel only with a stove).
 - Plan the whole cart, then call propose_cart. Aim to finish within about six tool calls.
+- When you present options or the user asks to compare or see choices, call show_products so they appear as cards the user can add to the cart; then keep your text short. The user can also add or remove cart items themselves; updates arrive at the start of their next message.
 - Call propose_cart. If it reports violations, fix the cart yourself (swap or drop items) and propose again. If the request can't be met within policy, say so plainly and offer the closest option.
 - Only call create_paypal_checkout when the user has asked you to buy. If they only asked for ideas, propose the cart and ask whether to check out.
 - The user approves every payment themselves with the PayPal button. You never capture payments.
@@ -146,6 +147,8 @@ export function summarize(name, r) {
       return `PayPal order ${r.paypal_order_id} awaiting your approval`;
     case "refund_order":
       return `Refunded $${r.amount.toFixed(2)} (${r.order_status})`;
+    case "show_products":
+      return `Showing ${r.shown} option${r.shown === 1 ? "" : "s"}`;
     case "propose_policy_change":
       return `Proposed ${r.changes.length} rule change${r.changes.length === 1 ? "" : "s"} · waiting for you`;
     default:
@@ -299,6 +302,16 @@ async function runOffline(session, userText, emit) {
     rationale = `Closest match to your request: ${best.name}.`;
   }
   if (!picks.length) return say("I couldn't find anything matching that within your budget. Try different keywords.");
+
+  // Show the picks (plus close alternatives for single-item requests) as cards.
+  const alternatives = picks.length === 1 ? pool.filter((p) => p.sku !== picks[0].sku && p.category === picks[0].category).slice(0, 2) : [];
+  await call("show_products", {
+    title: picks.length > 1 ? "My picks" : "Best match and alternatives",
+    products: [...picks, ...alternatives].map((p, i) => ({
+      sku: p.sku,
+      note: i < picks.length ? `★ ${p.rating} from ${p.reviews.toLocaleString("en-US")} reviews, best value in its kind` : "Alternative option",
+    })),
+  });
 
   const cart = await call("propose_cart", { items: picks.map((p) => ({ sku: p.sku, qty: 1 })), rationale });
   if (cart.error) return say(cart.error);

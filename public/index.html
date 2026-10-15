@@ -14,9 +14,9 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
-  <script src="https://cdn.jsdelivr.net/npm/ag-grid-community@33.3.2/dist/ag-grid-community.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/motion@11.11.17/dist/motion.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/ag-grid-community@33.3.2/dist/ag-grid-community.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/motion@11.11.17/dist/motion.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -157,6 +157,14 @@
   <footer class="foot">
     <span>CartPilot</span><span aria-hidden="true">·</span><span>Built for the PayPal AI Hackathon</span>
   </footer>
+
+  <dialog class="compare" id="compare" aria-labelledby="compare-title">
+    <div class="compare-head">
+      <h2 id="compare-title"><i data-lucide="scale"></i>Compare products</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Close"><i data-lucide="x"></i></button>
+    </div>
+    <div class="compare-body" id="compare-body"></div>
+  </dialog>
 
   <div class="toasts" id="toasts" aria-live="polite"></div>
 

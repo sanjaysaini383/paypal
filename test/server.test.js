@@ -75,3 +75,27 @@ test("plain-English rule: proposed in chat, applied by the user, then enforced",
   // The transcript keeps the proposal so a reload can show it.
   assert.ok(state.transcript.some((e) => e.role === "policy_proposal" && e.proposalId === proposal.id));
 });
+
+test("user cart edits go through the same guardrails", async () => {
+  const sid = "test_user_cart_edits";
+  const add = (sku) => api(sid, "/api/cart/items", { method: "POST", body: JSON.stringify({ sku }) }).then((r) => r.json());
+  let body = await add("OUT-TENT-2P");
+  assert.equal(body.result.status, "proposed");
+  body = await add("OUT-LAMP");
+  assert.deepEqual(body.state.carts.at(-1).items.map((i) => i.sku), ["OUT-TENT-2P", "OUT-LAMP"]);
+  assert.equal(body.state.carts.filter((c) => c.status === "proposed").length, 1, "only the newest cart stays open");
+
+  body = await add("GFT-CARD-50"); // gift cards are blocked by default
+  assert.equal(body.result.status, "blocked");
+  assert.ok(body.result.violations.some((v) => v.rule === "blocked_category"));
+
+  body = await (await api(sid, "/api/cart/items/GFT-CARD-50", { method: "DELETE" })).json();
+  assert.equal(body.result.status, "proposed");
+  assert.equal((await api(sid, "/api/cart/items", { method: "POST", body: JSON.stringify({ sku: "NOPE" }) })).status, 400);
+
+  // A replaced cart can't be checked out.
+  const old = body.state.carts.find((c) => c.status === "replaced");
+  const events = await chat(sid, "yes");
+  assert.ok(events.some((e) => e.type === "checkout"), "the current cart checks out");
+  assert.ok(old, "earlier carts are retired, not left open");
+});
