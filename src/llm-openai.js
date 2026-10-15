@@ -8,6 +8,8 @@ export const PRESETS = {
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     keyEnv: "GEMINI_API_KEY",
     model: "gemini-3.8-flash",
+    // Used in order when the main model is overloaded (503 "high demand").
+    fallbackModels: ["gemini-3.6-flash", "gemini-3.5-flash-lite"],
     reasoningEffort: "low",
   },
   groq: {
@@ -37,6 +39,9 @@ export function openAIConfig(provider) {
     baseUrl: (process.env.AI_BASE_URL || p.baseUrl).replace(/\/$/, ""),
     apiKey: process.env[p.keyEnv] || process.env.AI_API_KEY || "",
     model: process.env.AI_MODEL || p.model,
+    fallbackModels: process.env.AI_FALLBACK_MODELS
+      ? process.env.AI_FALLBACK_MODELS.split(",").map((m) => m.trim()).filter(Boolean)
+      : p.fallbackModels || [],
     reasoningEffort: process.env.AI_REASONING_EFFORT ?? p.reasoningEffort,
   };
 }
@@ -54,8 +59,27 @@ const TOOLS = TOOL_DEFS.map((t) => ({
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function complete(cfg, body) {
-  // Free tiers rate limit aggressively: back off and retry on 429/503.
+// Thrown when a model can't serve right now (overloaded or out of quota);
+// the caller then tries the next fallback model.
+class UnavailableError extends Error {
+  constructor(message, retryMs) {
+    super(message);
+    this.retryMs = retryMs;
+  }
+}
+
+// Gemini puts the wait in the body ("retryDelay": "23s"); others use Retry-After.
+function retryDelayMs(res, text) {
+  const header = Number(res.headers.get("retry-after"));
+  if (Number.isFinite(header) && header > 0) return header * 1000;
+  const m = /"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(text);
+  return m ? Number(m[1]) * 1000 : null;
+}
+
+async function completeOne(cfg, body, canFallback) {
+  // With no other model to try, sit out longer waits instead of failing.
+  const maxWait = canFallback ? 12_000 : 60_000;
+  // Free tiers rate limit aggressively: back off and retry on 429.
   for (let attempt = 0; ; attempt++) {
     const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
       method: "POST",
@@ -67,16 +91,53 @@ async function complete(cfg, body) {
     // Groq rejects malformed tool calls (e.g. gpt-oss emitting a garbled tool
     // name) with 400 tool_use_failed. It's a sampling glitch: just retry.
     if (res.status === 400 && text.includes("tool_use_failed") && attempt < 3) continue;
-    if ((res.status === 429 || res.status === 503) && attempt < 3) {
-      const retryAfter = Number(res.headers.get("retry-after"));
-      console.warn(`[${cfg.provider}] ${res.status} rate limited, retry-after=${res.headers.get("retry-after")} (attempt ${attempt + 1})`);
-      await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 2000 * 2 ** attempt);
-      continue;
+    if (res.status === 503 || res.status === 529) {
+      // Overloaded: one quick retry, then let the caller try another model.
+      if (attempt < 1) {
+        await sleep(1500);
+        continue;
+      }
+      throw new UnavailableError(`${body.model} is overloaded`, 5 * 60_000);
+    }
+    if (res.status === 429) {
+      // Short waits are worth sitting out; long ones (per-minute or daily
+      // quota) mean another model with its own quota is the faster path.
+      const wait = retryDelayMs(res, text) ?? 2000 * 2 ** attempt;
+      console.warn(`[${cfg.provider}] 429 on ${body.model}, wait ${Math.round(wait / 1000)}s (attempt ${attempt + 1})`);
+      if (wait <= maxWait && attempt < 3) {
+        await sleep(wait);
+        continue;
+      }
+      throw new UnavailableError(`${body.model} rate limited`, Math.max(wait, 30_000));
     }
     if (res.status === 401 || res.status === 403) throw new Error(`${cfg.provider}: API key rejected (${res.status}).`);
-    if (res.status === 429) throw new Error(`${cfg.provider}: free-tier rate limit reached. Wait a minute and try again.`);
     throw new Error(`${cfg.provider} API error ${res.status}: ${text.slice(0, 300)}`);
   }
+}
+
+// Models that recently were overloaded or out of quota are skipped until then.
+const unavailableUntil = new Map();
+
+async function complete(cfg, body) {
+  const all = [cfg.model, ...cfg.fallbackModels];
+  const healthy = all.filter((m) => !(unavailableUntil.get(m) > Date.now()));
+  const queue = healthy.length ? healthy : all;
+  let last;
+  for (const [i, model] of queue.entries()) {
+    try {
+      return await completeOne(cfg, { ...body, model }, i < queue.length - 1);
+    } catch (err) {
+      if (!(err instanceof UnavailableError)) throw err;
+      unavailableUntil.set(model, Date.now() + err.retryMs);
+      console.warn(`[${cfg.provider}] ${err.message}, trying the next model`);
+      last = err;
+    }
+  }
+  throw new Error(
+    /rate limited/.test(last?.message)
+      ? `${cfg.provider}: free-tier rate limit reached on every model. Wait about a minute and try again.`
+      : `${cfg.provider}: the model is overloaded right now (high demand). Try again in a minute.`,
+  );
 }
 
 function parseArgs(raw) {
