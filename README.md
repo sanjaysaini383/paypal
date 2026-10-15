@@ -33,7 +33,11 @@ We also show the threat that makes this necessary. One "merchant" in the catalog
 | 🧪 **Prompt-injection defense** | Untrusted listing text is flagged before the model acts on it; the system prompt treats it as data; server-side policy is the backstop. |
 | 📒 **Audit log + ledger (AG Grid)** | Every user message, agent tool call, guardrail decision and PayPal API call, with PayPal debug IDs, in sortable, filterable grids. |
 | 🔁 **Idempotent money movement** | `PayPal-Request-Id` on create, capture and refund, so retries can never double-charge or double-refund. |
-| 🌗 **Polished UI** | Streaming agent steps, reasoning summaries, live budget meter, light/dark mode, mobile layout. |
+| 🗣️ **Plain-English spending rules** | Say "never spend more than $50 a month on electronics" and the agent drafts the rule (per-category monthly limits, budgets, blocked categories). It can only *propose*; nothing changes until you click **Apply** on the old → new card. |
+| 🛍️ **Product cards & compare** | The agent shows options as cards (rating, price, verified store, stock, why it fits). Compare them side by side, add to the cart yourself, or remove items: your edits pass the same guardrails. |
+| 📊 **Spending insights (AG Charts)** | Stat tiles plus spending by category and by day, each with a table view. Counts carts blocked by your rules and scam listings caught. |
+| 💾 **Saved sessions** | Rules, carts, orders, the audit log and the chat itself are saved to disk, so restarts and page reloads lose nothing. |
+| 🌗 **Polished UI** | Streaming agent steps as a timeline, Motion animations, live budget meter, toasts, light/dark mode, mobile layout. |
 
 ![Guardrail blocking a gift card purchase](docs/guardrail-blocked.png)
 
@@ -42,7 +46,7 @@ We also show the threat that makes this necessary. One "merchant" in the catalog
 | PayPal capability | Where | What it does |
 |---|---|---|
 | OAuth 2.0 client credentials | [`src/paypal.js`](src/paypal.js) | Gets an access token, cached until expiry |
-| **Orders v2: Create** `POST /v2/checkout/orders` | `create_paypal_checkout` tool | Agent creates an order with `intent: CAPTURE`, item list, tax and shipping breakdown, and `experience_context` |
+| **Orders v2: Create** `POST /v2/checkout/orders` | `create_paypal_checkout` tool | Agent creates an order with `intent: CAPTURE`, item list, tax and shipping breakdown |
 | **JS SDK Smart Buttons** | [`public/app.js`](public/app.js) | Buyer reviews and approves the agent-created order in PayPal's own UI |
 | **Orders v2: Capture** `POST /v2/checkout/orders/{id}/capture` | `/api/orders/:id/capture` | Server captures after a final budget check; handles `INSTRUMENT_DECLINED` with `actions.restart()` |
 | **Payments v2: Refund** `POST /v2/payments/captures/{id}/refund` | `refund_order` tool | Full or line-item partial refunds with a note to the payer |
@@ -52,11 +56,10 @@ We also show the threat that makes this necessary. One "merchant" in the catalog
 
 - **Resilient on free tiers:** if a Gemini model is overloaded or out of quota, the app falls back to `gemini-3.6-flash`, then `gemini-3.5-flash-lite`, mid-conversation.
 - **Models (pluggable):** the agent runs on **Google Gemini** (`gemini-3.8-flash`, free tier) or **Claude Opus 5.5** (`claude-opus-5-5`), plus any OpenAI-compatible provider such as Groq or OpenRouter. It uses **tool use** in an agent loop ([`src/agent.js`](src/agent.js), [`src/llm-openai.js`](src/llm-openai.js)). Pick one with an API key in `.env`.
-- **Tools:** `search_catalog`, `get_wallet_status`, `propose_cart`, `create_paypal_checkout`, `refund_order` ([`src/tools.js`](src/tools.js)).
-- **Claude extras:** adaptive thinking with summarized reasoning, shown in the UI as collapsible "Reasoning" so users can see *why* the agent chose items.
-  server-side refusal fallback (`fallbacks: "default"`) so a safety-classifier false positive doesn't break a shopping session.
-  and prompt caching on the system prompt.
-- **Free-tier friendly:** automatic backoff and retry on rate limits (429), and Gemini thought signatures are preserved across tool calls.
+- **Tools:** `search_catalog`, `get_wallet_status`, `show_products`, `propose_cart`, `create_paypal_checkout`, `refund_order`, `propose_policy_change` ([`src/tools.js`](src/tools.js)).
+- **Language → enforced policy:** the model turns a sentence into a structured rule change; the server validates it, shows a diff and only applies it after the user confirms.
+- **Claude extras:** adaptive thinking with summarized reasoning (shown as a collapsible "Reasoning" block), server-side refusal fallback (`fallbacks: "default"`), and prompt caching on the system prompt.
+- **Free-tier friendly:** automatic backoff on rate limits (429), a 45s timeout per model call, fallback to the next model when one is overloaded, out of quota or slow, and Gemini thought signatures preserved across tool calls.
 - **No key? Still runnable.** With no AI key the app uses a deterministic, rule-based planner that drives the *same* tools, guardrails and PayPal calls. This keeps the demo usable offline; the full agentic experience needs the key.
 
 ## Architecture
@@ -111,6 +114,8 @@ It runs in three configurations, and the header badges show which one is active:
 - `Find me the cheapest 2-person tent you can and buy it.` → watch the agent catch the scam listing
 - `Buy a $200 gift card for my sister.` → blocked by policy; unblock "gift cards" in the policy panel and retry
 - `The sleeping pad from my last order arrived punctured. Please refund just that item.`
+- `Never spend more than $50 a month on electronics` → review the proposed rule and click **Apply**
+- `Show me a few earbuds and headphones to compare` → tick two cards and press **Compare**
 - Lower the monthly budget to $100, then ask for something pricier → the agent revises the cart to fit
 
 ## Tests
@@ -119,7 +124,7 @@ It runs in three configurations, and the header badges show which one is active:
 npm test
 ```
 
-Covers pricing, injection flagging, every guardrail rule, and a full checkout → capture → partial refund → budget accounting flow (simulated PayPal, no keys needed).
+17 tests: pricing, injection flagging, every guardrail rule incl. category limits, checkout → capture → partial refund, double-click and cancelled-cart capture, plain-English rule proposals, user cart edits, model fallback and timeouts, and restart persistence (simulated PayPal, no keys needed).
 
 ## Deploy (Render)
 
@@ -135,8 +140,8 @@ src/
   tools.js    Tool definitions + executors, catalog search, injection flagging
   policy.js   Pricing and guardrail rules
   paypal.js   PayPal REST client (OAuth, Orders v2, Payments v2) + simulator
-  store.js    Per-session state and audit log
-public/       Single-page UI (vanilla JS, AG Grid, PayPal JS SDK)
+  store.js    Per-session state, audit log, transcript; saved to .data/sessions.json
+public/       Single-page UI (vanilla JS, Motion, Lucide, AG Grid, AG Charts, PayPal JS SDK)
 data/         Multi-merchant product catalog (includes one malicious listing)
 test/         node:test suite
 ```
@@ -147,7 +152,7 @@ test/         node:test suite
 - **PayPal Vault + reference transactions** for pre-authorized micro-purchases under a user-set threshold, keeping human approval for anything larger.
 - **PayPal webhooks** (`PAYMENT.CAPTURE.COMPLETED`, `PAYMENT.CAPTURE.REFUNDED`) to reconcile the ledger asynchronously.
 - **Merchant-side agent:** the same guardrail and audit pattern for sellers issuing invoices and refunds.
-- **Persistent storage** (Postgres) and real user accounts.
+- **Hosted database** (Postgres) and real user accounts; today sessions are saved to a local file.
 
 ## License
 
