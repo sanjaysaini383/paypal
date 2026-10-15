@@ -3,93 +3,143 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>CartPilot · AI shopping agent with PayPal guardrails</title>
+  <title>CartPilot · AI shopping agent with PayPal checkout</title>
   <meta name="description" content="An AI agent that shops for you and pays with PayPal, inside spending rules it can't break." />
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231f5eff'/%3E%3Cpath d='M8 10h3l2.5 10h9l2-7H12' stroke='white' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='14' cy='24' r='1.6' fill='white'/%3E%3Ccircle cx='21' cy='24' r='1.6' fill='white'/%3E%3C/svg%3E" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%234f46e5'/%3E%3Cpath d='M8 10h3l2.5 10h9l2-7H12' stroke='white' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='14' cy='24' r='1.6' fill='white'/%3E%3Ccircle cx='21' cy='24' r='1.6' fill='white'/%3E%3C/svg%3E" />
+  <script>
+    // Apply the saved theme before first paint to avoid a flash.
+    try { const t = localStorage.getItem("cartpilot-theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/ag-grid-community@33.3.2/dist/ag-grid-community.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/motion@11.11.17/dist/motion.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js"></script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">
-      <span class="logo" aria-hidden="true">
-        <svg viewBox="0 0 32 32"><rect width="32" height="32" rx="8" /><path d="M8 10h3l2.5 10h9l2-7H12" /><circle cx="14" cy="24" r="1.6" /><circle cx="21" cy="24" r="1.6" /></svg>
-      </span>
-      <div>
-        <h1>CartPilot</h1>
-        <p class="tagline">Your AI shopping agent. PayPal checkout. Rules it can't break.</p>
-      </div>
-    </div>
-    <div class="status">
-      <span class="badge" id="ai-badge">AI: …</span>
-      <span class="badge" id="pp-badge">PayPal: …</span>
-      <div class="meter" title="Spent this month vs. monthly budget">
-        <div class="meter-label"><span id="spent">$0</span> of <span id="budget">$0</span> used</div>
-        <div class="meter-track"><div class="meter-fill" id="meter-fill"></div></div>
-      </div>
+    <div class="topbar-inner">
+      <a class="brand" href="/" aria-label="CartPilot home">
+        <span class="logo" aria-hidden="true">
+          <svg viewBox="0 0 32 32"><path d="M8 10h3l2.5 10h9l2-7H12" /><circle cx="14" cy="24" r="1.6" /><circle cx="21" cy="24" r="1.6" /></svg>
+        </span>
+        <span class="brand-name">CartPilot</span>
+      </a>
+      <nav class="top-actions">
+        <a class="icon-btn" id="repo-link" href="https://github.com/sanjaysaini383/paypal" target="_blank" rel="noopener" title="Source code" aria-label="Source code"><i data-lucide="github"></i></a>
+        <button class="icon-btn" id="theme-btn" type="button" title="Toggle theme" aria-label="Toggle theme"><i data-lucide="sun-moon"></i></button>
+        <button class="btn btn-secondary" id="reset-btn" type="button"><i data-lucide="square-pen"></i><span>New chat</span></button>
+      </nav>
     </div>
   </header>
 
   <main class="layout">
-    <section class="panel chat" aria-label="Chat with the agent">
-      <div class="panel-head">
-        <h2>Agent</h2>
-        <button class="ghost small" id="reset-btn" type="button">New conversation</button>
-      </div>
+    <!-- ------------------------------------------------------------ chat -->
+    <section class="card chat" aria-label="Shopping assistant">
       <div class="messages" id="messages" aria-live="polite">
-        <div class="welcome" id="welcome">
-          <h3>Tell me what you need. I'll find it, build the cart, and hand you a PayPal checkout.</h3>
-          <p>Every cart is checked against your spending policy on the server, so I can't overspend even if a product listing tries to trick me.</p>
-          <div class="chips" id="chips">
-            <button type="button" class="chip" data-prompt="Plan a weekend camping trip for 2 people. Keep it under $300 and buy it.">🏕️ Camping trip for 2 under $300</button>
-            <button type="button" class="chip" data-prompt="Upgrade my work-from-home desk for about $250. Suggest a cart first.">💻 WFH desk upgrade ~$250</button>
-            <button type="button" class="chip" data-prompt="Find me the cheapest 2-person tent you can and buy it.">⛺ Cheapest tent (spot the scam)</button>
-            <button type="button" class="chip" data-prompt="Buy a $200 gift card for my sister.">🎁 $200 gift card (policy test)</button>
-            <button type="button" class="chip" data-prompt="The sleeping pad from my last order arrived punctured. Please refund just that item.">↩️ Refund a damaged item</button>
+        <div class="empty" id="welcome">
+          <div class="empty-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32"><path d="M8 10h3l2.5 10h9l2-7H12" /><circle cx="14" cy="24" r="1.6" /><circle cx="21" cy="24" r="1.6" /></svg>
+          </div>
+          <h1>What can I shop for today?</h1>
+          <p>I find products across trusted stores, build your cart and prepare a PayPal checkout. You approve every payment, and your spending rules always apply.</p>
+          <div class="suggestions" id="suggestions">
+            <button type="button" class="suggestion" data-prompt="Plan a weekend camping trip for 2 people. Keep it under $300 and buy it.">
+              <span class="s-icon"><i data-lucide="tent"></i></span>
+              <span class="s-text"><strong>Plan a camping trip</strong><small>Gear for two, under $300</small></span>
+            </button>
+            <button type="button" class="suggestion" data-prompt="Find me the cheapest 2-person tent you can and buy it.">
+              <span class="s-icon"><i data-lucide="shield-alert"></i></span>
+              <span class="s-text"><strong>Find the cheapest tent</strong><small>Watch it avoid a scam listing</small></span>
+            </button>
+            <button type="button" class="suggestion" data-prompt="Upgrade my work-from-home desk for about $250. Suggest a cart first.">
+              <span class="s-icon"><i data-lucide="laptop"></i></span>
+              <span class="s-text"><strong>Upgrade my desk setup</strong><small>Suggestions around $250</small></span>
+            </button>
+            <button type="button" class="suggestion" data-prompt="Buy a $200 gift card for my sister.">
+              <span class="s-icon"><i data-lucide="gift"></i></span>
+              <span class="s-text"><strong>Buy a gift card</strong><small>See your spending rules at work</small></span>
+            </button>
           </div>
         </div>
       </div>
       <form class="composer" id="composer">
-        <textarea id="input" rows="1" placeholder="e.g. Coffee and snacks for the office, under $60" aria-label="Message"></textarea>
-        <button type="submit" class="primary" id="send-btn">Send</button>
+        <div class="composer-box">
+          <textarea id="input" rows="1" placeholder="Ask CartPilot to find, buy or return something…" aria-label="Message"></textarea>
+          <button type="submit" class="send-btn" id="send-btn" aria-label="Send"><i data-lucide="arrow-up"></i></button>
+        </div>
+        <p class="composer-hint">Enter to send · Shift + Enter for a new line</p>
       </form>
     </section>
 
+    <!-- ------------------------------------------------------------ sidebar -->
     <aside class="side">
-      <section class="panel" aria-label="Cart and checkout">
-        <div class="panel-head"><h2>Cart &amp; checkout</h2><span class="muted small" id="cart-status"></span></div>
-        <div id="cart" class="cart empty">
-          <p class="muted">The agent's proposed cart shows up here for you to review and pay.</p>
+      <section class="card wallet" aria-label="Budget">
+        <div class="wallet-top">
+          <span class="eyebrow"><i data-lucide="wallet"></i>Available this month</span>
+          <span class="muted small" id="wallet-period"></span>
+        </div>
+        <div class="wallet-amount" id="remaining">$0.00</div>
+        <div class="progress" aria-hidden="true"><div class="progress-fill" id="progress-fill"></div></div>
+        <div class="wallet-stats">
+          <div><span class="muted">Spent</span><strong id="spent">$0.00</strong></div>
+          <div><span class="muted">Budget</span><strong id="budget">$0.00</strong></div>
+          <div><span class="muted">Per order</span><strong id="per-order">$0</strong></div>
         </div>
       </section>
 
-      <section class="panel" aria-label="Spending policy">
-        <div class="panel-head"><h2>Spending policy</h2><span class="muted small">enforced server-side</span></div>
-        <form id="policy" class="policy">
-          <label>Monthly budget <span class="input-wrap"><span>$</span><input type="number" name="monthlyBudget" min="0" step="10" /></span></label>
-          <label>Per-order limit <span class="input-wrap"><span>$</span><input type="number" name="perOrderLimit" min="0" step="10" /></span></label>
-          <label>Per-item cap <span class="input-wrap"><span>$</span><input type="number" name="maxItemPrice" min="0" step="10" /></span></label>
-          <label>Min. product rating <span class="input-wrap"><span>★</span><input type="number" name="minMerchantRating" min="0" max="5" step="0.1" /></span></label>
+      <section class="card" aria-label="Cart">
+        <div class="card-head">
+          <h2><i data-lucide="shopping-bag"></i>Cart</h2>
+          <span id="cart-status"></span>
+        </div>
+        <div id="cart" class="cart">
+          <div class="cart-empty">
+            <i data-lucide="package-open"></i>
+            <p>Your cart is empty</p>
+            <small>The agent's proposed cart appears here for you to review and pay.</small>
+          </div>
+        </div>
+      </section>
+
+      <section class="card policy-card" aria-label="Spending rules">
+        <button class="card-head collapsible" id="policy-toggle" type="button" aria-expanded="false" aria-controls="policy">
+          <h2><i data-lucide="shield-check"></i>Spending rules</h2>
+          <span class="policy-summary muted small" id="policy-summary"></span>
+          <i data-lucide="chevron-down" class="chev"></i>
+        </button>
+        <form id="policy" class="policy" hidden>
+          <div class="field-grid">
+            <label class="field">Monthly budget<span class="input"><span>$</span><input type="number" name="monthlyBudget" min="0" step="10" /></span></label>
+            <label class="field">Per order<span class="input"><span>$</span><input type="number" name="perOrderLimit" min="0" step="10" /></span></label>
+            <label class="field">Per item<span class="input"><span>$</span><input type="number" name="maxItemPrice" min="0" step="10" /></span></label>
+            <label class="field">Min. rating<span class="input"><span>★</span><input type="number" name="minMerchantRating" min="0" max="5" step="0.1" /></span></label>
+          </div>
           <fieldset>
             <legend>Blocked categories</legend>
-            <div class="checks" id="cat-checks"></div>
+            <div class="toggles" id="cat-checks"></div>
           </fieldset>
-          <label class="toggle"><input type="checkbox" name="requireVerifiedMerchants" /> Only verified merchants</label>
-          <button type="submit" class="secondary">Save policy</button>
+          <label class="switch-row">
+            <span><strong>Verified stores only</strong><small>Skip sellers that haven't been verified</small></span>
+            <span class="switch"><input type="checkbox" name="requireVerifiedMerchants" /><span></span></span>
+          </label>
+          <p class="policy-note"><i data-lucide="lock"></i>Checked on the server for every cart, checkout and payment.</p>
+          <button type="submit" class="btn btn-primary btn-block">Save rules</button>
         </form>
       </section>
     </aside>
 
-    <section class="panel ledger" aria-label="Ledger">
-      <div class="panel-head">
+    <!-- ------------------------------------------------------------ activity -->
+    <section class="card activity" aria-label="Activity">
+      <div class="card-head">
         <div class="tabs" role="tablist">
-          <button role="tab" class="tab active" data-tab="orders" aria-selected="true">Purchases</button>
-          <button role="tab" class="tab" data-tab="audit" aria-selected="false">Agent audit log <span class="count" id="audit-count">0</span></button>
+          <button role="tab" class="tab active" data-tab="orders" aria-selected="true"><i data-lucide="receipt"></i>Purchases</button>
+          <button role="tab" class="tab" data-tab="audit" aria-selected="false"><i data-lucide="list-checks"></i>Audit log <span class="count" id="audit-count">0</span></button>
+          <span class="tab-indicator" id="tab-indicator"></span>
         </div>
-        <span class="muted small">Every agent action, guardrail decision and PayPal call is recorded.</span>
+        <span class="muted small hide-sm">Every action, rule check and payment is recorded.</span>
       </div>
       <div id="orders-grid" class="grid"></div>
       <div id="audit-grid" class="grid" hidden></div>
@@ -97,9 +147,10 @@
   </main>
 
   <footer class="foot">
-    Built for the PayPal AI Hackathon · PayPal Orders v2 &amp; Payments v2 (sandbox) · Claude tool use · AG Grid ·
-    <a href="https://github.com/" id="repo-link" target="_blank" rel="noopener">Source</a>
+    <span>CartPilot</span><span aria-hidden="true">·</span><span>Built for the PayPal AI Hackathon</span>
   </footer>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
 
   <script src="app.js" type="module"></script>
 </body>
