@@ -82,7 +82,7 @@ app.put("/api/policy", (req, res) => {
 app.post("/api/carts/:id/reject", (req, res) => {
   const s = session(req);
   const cart = s.carts.get(req.params.id);
-  if (!cart || cart.status === "paid") return res.status(404).json({ error: "Cart not found" });
+  if (!cart || cart.status === "paid" || cart.status === "capturing") return res.status(404).json({ error: "Cart not found" });
   cart.status = "rejected";
   audit(s, "user", "cart_rejected", `Rejected ${cart.id} ($${cart.total.toFixed(2)})`);
   s.pendingEvents.push(`The user rejected cart ${cart.id}.`);
@@ -94,7 +94,8 @@ app.post("/api/orders/:orderId/capture", async (req, res) => {
   const s = session(req);
   const cart = [...s.carts.values()].find((c) => c.paypalOrderId === req.params.orderId);
   if (!cart) return res.status(404).json({ error: "This order doesn't belong to your session." });
-  if (cart.status === "paid") return res.status(409).json({ error: "Already captured." });
+  if (cart.status === "paid" || cart.status === "capturing") return res.status(409).json({ error: "Already captured." });
+  if (cart.status !== "checkout") return res.status(409).json({ error: `This cart is ${cart.status}; it can't be paid.` });
 
   // Final guardrail at the moment money moves.
   const remaining = s.policy.monthlyBudget - spentThisMonth(s);
@@ -103,6 +104,8 @@ app.post("/api/orders/:orderId/capture", async (req, res) => {
     return res.status(403).json({ error: "Capture blocked: this would exceed your monthly budget." });
   }
 
+  // Lock before the await so a double click can't record the payment twice.
+  cart.status = "capturing";
   try {
     const cap = await paypal.captureOrder(cart.paypalOrderId);
     if (cap.status !== "COMPLETED") throw new Error(`Capture status ${cap.status}`);
@@ -128,6 +131,7 @@ app.post("/api/orders/:orderId/capture", async (req, res) => {
     s.pendingEvents.push(`The user approved and paid PayPal order ${order.orderId} ($${order.total.toFixed(2)}).`);
     res.json({ ok: true, order, state: snapshot(s) });
   } catch (err) {
+    cart.status = "checkout"; // unlock so the buyer can retry (e.g. another card)
     audit(s, "paypal", "capture_failed", err.message, "error");
     const issue = err.details?.details?.[0]?.issue;
     // INSTRUMENT_DECLINED: let the buyer pick another funding source.

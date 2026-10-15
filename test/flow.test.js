@@ -74,3 +74,21 @@ test("checkout, capture and partial refund through simulated PayPal", async () =
   const wallet = await runTool(s, "get_wallet_status", {}, noop);
   assert.equal(wallet.spent_this_month, Math.round((cart.total - 27.05) * 100) / 100);
 });
+
+test("refunding every item one by one also refunds shipping", async () => {
+  const s = getSession("test_refund_all");
+  // Under $75, so the order carries a shipping fee.
+  const cart = await runTool(s, "propose_cart", { items: [{ sku: "HOM-MUG", qty: 1 }, { sku: "GRO-TEA", qty: 1 }], rationale: "x" }, noop);
+  assert.equal(cart.shipping, 6.99);
+  const co = await runTool(s, "create_paypal_checkout", { cart_id: cart.cart_id }, noop);
+  const cap = await paypal.captureOrder(co.paypal_order_id);
+  s.orders.push({
+    orderId: cap.orderId, captureId: cap.captureId, capturedAt: new Date().toISOString(),
+    items: s.carts.get(cart.cart_id).items.map((i) => ({ ...i, refunded: false })),
+    total: cart.total, refunded: 0, refunds: [], status: "COMPLETED",
+  });
+  await runTool(s, "refund_order", { order_id: cap.orderId, skus: ["HOM-MUG"], reason: "x" }, noop);
+  const last = await runTool(s, "refund_order", { order_id: cap.orderId, skus: ["GRO-TEA"], reason: "x" }, noop);
+  assert.equal(last.order_status, "REFUNDED");
+  assert.equal(s.orders[0].refunded, cart.total);
+});

@@ -294,6 +294,9 @@ export const EXECUTORS = {
       const goods = lines.reduce((s, i) => s + i.price * i.qty, 0);
       const tax = lines.filter((i) => i.category !== "gift_cards").reduce((s, i) => s + i.price * i.qty, 0) * 0.0825;
       amount = Math.min(remaining, round2(goods + tax));
+      // Returning the last items refunds everything left, shipping included,
+      // so the order can reach REFUNDED instead of stalling a few dollars short.
+      if (order.items.every((i) => i.refunded || lines.includes(i))) amount = remaining;
     } else {
       amount = remaining;
       lines = order.items.filter((i) => !i.refunded);

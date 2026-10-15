@@ -132,9 +132,11 @@ export async function captureOrder(orderId) {
   if (paypalMode === "simulated") {
     const o = sim.get(orderId);
     if (!o) throw new PayPalError("Order not found");
-    if (o.status === "COMPLETED") throw new PayPalError("ORDER_ALREADY_CAPTURED");
+    // Behave like the real API: network latency, and a repeated capture with
+    // the same PayPal-Request-Id returns the original success response.
+    await new Promise((r) => setTimeout(r, 150));
     o.status = "COMPLETED";
-    o.captureId = simId("SIM-CAP-");
+    o.captureId ||= simId("SIM-CAP-");
     return {
       orderId,
       status: "COMPLETED",
