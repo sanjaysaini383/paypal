@@ -181,7 +181,7 @@ async function runOffline(session, userText, emit) {
 
   if (!session.offlineNoticeShown) {
     session.offlineNoticeShown = true;
-    say("(Offline demo agent: set ANTHROPIC_API_KEY to use Claude. Guardrails and PayPal work the same either way.)");
+    say("(Offline demo agent: set GEMINI_API_KEY (free) or ANTHROPIC_API_KEY to use a real AI model. Guardrails and PayPal work the same either way.)");
   }
 
   const wallet = await call("get_wallet_status", {});

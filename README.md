@@ -26,7 +26,7 @@ We also show the threat that makes this necessary. One "merchant" in the catalog
 
 | | |
 |---|---|
-| 🤖 **Agentic shopping** | Claude (Opus 5.5) plans with tool use: searches the catalog several times, checks the wallet, proposes a cart, fixes policy violations itself, and creates the PayPal order. |
+| 🤖 **Agentic shopping** | An LLM agent (Gemini by default, or Claude) plans with tool use: searches the catalog several times, checks the wallet, proposes a cart, fixes policy violations itself, and creates the PayPal order. |
 | 💳 **PayPal Orders v2** | Server-side order creation with full item, tax and shipping breakdown, plus PayPal JS SDK Smart Buttons for buyer approval and server-side capture. |
 | ↩️ **PayPal Payments v2 refunds** | "The sleeping pad arrived punctured" → the agent finds the order and refunds only that line (plus its tax) on the original capture. |
 | 🛡️ **Guardrail engine** | Monthly budget, per-order limit, per-item cap, blocked categories/merchants, verified-merchant requirement, minimum rating, stock and quantity sanity checks. |
@@ -50,6 +50,7 @@ We also show the threat that makes this necessary. One "merchant" in the catalog
 
 ## How AI is used
 
+- **Resilient on free tiers:** if a Gemini model is overloaded or out of quota, the app falls back to `gemini-3.6-flash`, then `gemini-3.5-flash-lite`, mid-conversation.
 - **Models (pluggable):** the agent runs on **Google Gemini** (`gemini-3.8-flash`, free tier) or **Claude Opus 5.5** (`claude-opus-5-5`), plus any OpenAI-compatible provider such as Groq or OpenRouter. It uses **tool use** in an agent loop ([`src/agent.js`](src/agent.js), [`src/llm-openai.js`](src/llm-openai.js)). Pick one with an API key in `.env`.
 - **Tools:** `search_catalog`, `get_wallet_status`, `propose_cart`, `create_paypal_checkout`, `refund_order` ([`src/tools.js`](src/tools.js)).
 - **Claude extras:** adaptive thinking with summarized reasoning, shown in the UI as collapsible "Reasoning" so users can see *why* the agent chose items.
@@ -129,7 +130,8 @@ Covers pricing, injection flagging, every guardrail rule, and a full checkout �
 ```
 src/
   server.js   Express API: chat stream, capture, policy, state
-  agent.js    Claude agent loop (+ offline fallback planner)
+  agent.js    Agent entry: Claude loop, provider selection, offline planner
+  llm-openai.js  Gemini / Groq / OpenRouter loop with model fallback
   tools.js    Tool definitions + executors, catalog search, injection flagging
   policy.js   Pricing and guardrail rules
   paypal.js   PayPal REST client (OAuth, Orders v2, Payments v2) + simulator

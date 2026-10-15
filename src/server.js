@@ -9,6 +9,8 @@ import * as paypal from "./paypal.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
+// Hosts like Render sit behind one proxy; trust it so req.ip is the client.
+app.set("trust proxy", 1);
 app.use(express.json({ limit: "32kb" }));
 app.use(express.static(path.join(here, "..", "public")));
 
@@ -39,8 +41,15 @@ app.get("/api/config", (req, res) => {
 
 app.get("/api/state", (req, res) => res.json(snapshot(session(req))));
 
-// Per-session limit so a public demo can't burn through the API key.
+// Per-session and per-IP limits so a public demo can't burn through the API
+// key (a new session id alone doesn't reset the IP limit).
 const CHAT_LIMIT = Number(process.env.CHAT_LIMIT_PER_HOUR || 40);
+const IP_LIMIT = Number(process.env.CHAT_LIMIT_PER_IP_PER_HOUR || 120);
+const ipHits = new Map();
+setInterval(() => {
+  const cutoff = Date.now() - 3600_000;
+  for (const [ip, times] of ipHits) if (!times.some((t) => t > cutoff)) ipHits.delete(ip);
+}, 10 * 60 * 1000).unref();
 
 app.post("/api/chat", async (req, res) => {
   const s = session(req);
@@ -49,6 +58,10 @@ app.post("/api/chat", async (req, res) => {
   if (s.busy) return res.status(409).json({ error: "The agent is still working on your last message." });
   s.chatTimes = (s.chatTimes || []).filter((t) => t > Date.now() - 3600_000);
   if (s.chatTimes.length >= CHAT_LIMIT) return res.status(429).json({ error: "Hourly demo limit reached for this session." });
+  const ipTimes = (ipHits.get(req.ip) || []).filter((t) => t > Date.now() - 3600_000);
+  if (ipTimes.length >= IP_LIMIT) return res.status(429).json({ error: "Hourly demo limit reached. Please try again later." });
+  ipTimes.push(Date.now());
+  ipHits.set(req.ip, ipTimes);
   s.chatTimes.push(Date.now());
 
   s.busy = true;
