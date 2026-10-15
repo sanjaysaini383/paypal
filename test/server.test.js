@@ -57,3 +57,21 @@ test("orders from another session can't be captured", async () => {
   const res = await api("test_other_session", `/api/orders/${orderId}/capture`, { method: "POST" });
   assert.equal(res.status, 404);
 });
+
+test("plain-English rule: proposed in chat, applied by the user, then enforced", async () => {
+  const sid = "test_plain_english_rule";
+  const events = await chat(sid, "Never spend more than $60 a month on electronics");
+  const proposal = events.find((e) => e.type === "policy_proposal")?.proposal;
+  assert.ok(proposal, "agent should propose a rule change");
+  let state = await (await api(sid, "/api/state")).json();
+  assert.deepEqual(state.policy.categoryLimits, {});
+
+  const res = await api(sid, `/api/policy/proposals/${proposal.id}/apply`, { method: "POST" });
+  state = await res.json();
+  assert.deepEqual(state.policy.categoryLimits, { electronics: 60 });
+  assert.equal(state.proposals.find((p) => p.id === proposal.id).status, "applied");
+  assert.equal((await api(sid, `/api/policy/proposals/${proposal.id}/apply`, { method: "POST" })).status, 409);
+
+  // The transcript keeps the proposal so a reload can show it.
+  assert.ok(state.transcript.some((e) => e.role === "policy_proposal" && e.proposalId === proposal.id));
+});

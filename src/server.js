@@ -3,7 +3,7 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getSession, audit, spentThisMonth, categorySpendThisMonth, remember } from "./store.js";
-import { sanitizePolicy } from "./policy.js";
+import { sanitizePolicy, applyPolicyChanges } from "./policy.js";
 import { runAgent, aiMode, MODEL } from "./agent.js";
 import * as paypal from "./paypal.js";
 
@@ -131,6 +131,29 @@ app.put("/api/policy", (req, res) => {
   s.policy = sanitizePolicy(req.body || {}, s.policy);
   audit(s, "user", "policy_updated", `Budget $${s.policy.monthlyBudget}/mo, $${s.policy.perOrderLimit}/order, $${s.policy.maxItemPrice}/item`);
   s.pendingEvents.push(`The user updated their spending policy: ${JSON.stringify(s.policy)}`);
+  res.json(snapshot(s));
+});
+
+// Rule changes the agent proposed only take effect when the user applies them.
+app.post("/api/policy/proposals/:id/:action", (req, res) => {
+  const s = session(req);
+  const proposal = s.policyProposals.get(req.params.id);
+  if (!proposal) return res.status(404).json({ error: "Proposal not found" });
+  if (proposal.status !== "pending") return res.status(409).json({ error: `Already ${proposal.status}` });
+  if (req.params.action === "apply") {
+    const { next, diff } = applyPolicyChanges(s.policy, proposal.changes);
+    s.policy = next;
+    proposal.status = "applied";
+    proposal.diff = diff.length ? diff : proposal.diff;
+    audit(s, "user", "policy_updated", `Applied: ${proposal.summary}`);
+    s.pendingEvents.push(`The user applied the rule change "${proposal.summary}". Current policy: ${JSON.stringify(s.policy)}`);
+  } else if (req.params.action === "dismiss") {
+    proposal.status = "dismissed";
+    audit(s, "user", "policy_dismissed", `Dismissed: ${proposal.summary}`);
+    s.pendingEvents.push(`The user dismissed the proposed rule change "${proposal.summary}".`);
+  } else {
+    return res.status(404).json({ error: "Unknown action" });
+  }
   res.json(snapshot(s));
 });
 

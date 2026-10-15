@@ -4,7 +4,7 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const CATEGORIES = ["outdoor", "electronics", "home", "grocery", "gift_cards", "books"];
 const CATEGORY_ICONS = { outdoor: "tent", electronics: "cpu", home: "lamp", grocery: "coffee", gift_cards: "gift", books: "book-open" };
-const TOOL_ICONS = { search_catalog: "search", get_wallet_status: "wallet", propose_cart: "shopping-cart", create_paypal_checkout: "credit-card", refund_order: "undo-2" };
+const TOOL_ICONS = { search_catalog: "search", get_wallet_status: "wallet", propose_cart: "shopping-cart", create_paypal_checkout: "credit-card", refund_order: "undo-2", propose_policy_change: "shield-check", show_products: "layout-grid" };
 const LOGO = '<svg viewBox="0 0 32 32"><path d="M8 10h3l2.5 10h9l2-7H12" /><circle cx="14" cy="24" r="1.6" /><circle cx="21" cy="24" r="1.6" /></svg>';
 const fmt = (n) => "$" + Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -113,9 +113,95 @@ async function boot() {
   if (config.paypalMode === "sandbox") loadPayPalSdk();
 }
 
-// Filled in by the product-card and rule-proposal features below.
+// Filled in by the product-card feature below.
 function renderProducts() {}
-function renderProposal() {}
+
+// ------------------------------------------------------------------ rule proposals
+// The agent can only propose rule changes; this card lets the user apply them.
+function renderProposal(p) {
+  $("#welcome")?.remove();
+  const card = document.createElement("div");
+  card.className = "proposal";
+  messagesEl.append(card);
+  paintProposal(card, p);
+  enter(card);
+  scrollDown();
+}
+
+function paintProposal(card, p) {
+  const done = { applied: ["paid", "Applied"], dismissed: ["rejected", "Dismissed"] }[p.status];
+  card.innerHTML = `
+    <div class="proposal-head">
+      <span class="proposal-icon">${icon("shield-check")}</span>
+      <div><strong>Proposed rule change</strong><small>${esc(p.summary)}</small></div>
+      ${done ? `<span class="badge ${done[0]}">${done[1]}</span>` : ""}
+    </div>
+    <ul class="diff">${p.diff
+      .map((d) => `<li><span class="d-label">${esc(d.label)}</span><span class="d-from">${esc(d.from)}</span>${icon("arrow-right")}<span class="d-to">${esc(d.to)}</span></li>`)
+      .join("")}</ul>
+    ${p.status === "pending" ? `<div class="proposal-actions"><button class="btn btn-primary" data-act="apply">${icon("check")}Apply rule</button><button class="btn btn-secondary" data-act="dismiss">Dismiss</button></div>` : ""}`;
+  card.querySelectorAll("[data-act]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const act = b.dataset.act;
+      const res = await api(`/api/policy/proposals/${p.id}/${act}`, { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) return toast("bad", "Couldn't update your rules", body.error || "");
+      state = body;
+      paintProposal(card, state.proposals.find((x) => x.id === p.id) || { ...p, status: act === "apply" ? "applied" : "dismissed" });
+      render();
+      toast("ok", act === "apply" ? "Rule applied" : "Change dismissed", act === "apply" ? p.summary : "");
+    }),
+  );
+  refreshIcons();
+}
+
+function renderLimits() {
+  const limits = state.policy.categoryLimits || {};
+  const spent = state.categorySpend || {};
+  const el = $("#category-limits");
+  const entries = Object.entries(limits);
+  el.hidden = !entries.length;
+  el.innerHTML = entries
+    .map(([cat, limit]) => {
+      const used = spent[cat] || 0;
+      const pct = limit ? Math.min(100, (used / limit) * 100) : 100;
+      return `<div class="limit">
+        <span class="limit-icon">${icon(CATEGORY_ICONS[cat] || "package")}</span>
+        <div class="limit-main">
+          <div class="limit-top"><span>${esc(cat.replace("_", " "))}</span><span class="muted">${fmt(used)} / ${fmt(limit)} a month</span></div>
+          <div class="progress thin"><div class="progress-fill${pct >= 100 ? " full" : pct >= 75 ? " high" : ""}" style="width:${pct}%"></div></div>
+        </div>
+        <button type="button" class="icon-btn sm" data-remove-limit="${esc(cat)}" title="Remove limit" aria-label="Remove ${esc(cat)} limit">${icon("x")}</button>
+      </div>`;
+    })
+    .join("");
+  refreshIcons();
+}
+
+$("#category-limits").addEventListener("click", async (e) => {
+  const cat = e.target.closest("[data-remove-limit]")?.dataset.removeLimit;
+  if (!cat) return;
+  const categoryLimits = { ...state.policy.categoryLimits };
+  delete categoryLimits[cat];
+  const res = await api("/api/policy", { method: "PUT", body: JSON.stringify({ categoryLimits }) });
+  state = await res.json();
+  render();
+  toast("ok", "Limit removed", `No monthly cap on ${cat.replace("_", " ")} anymore.`);
+});
+
+function askRule() {
+  const text = $("#nl-rule").value.trim();
+  if (!text || busy) return;
+  $("#nl-rule").value = "";
+  send(text);
+}
+$("#nl-rule-btn").addEventListener("click", askRule);
+$("#nl-rule").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault(); // don't submit the rules form
+    askRule();
+  }
+});
 
 async function refresh() {
   state = await (await api("/api/state")).json();
@@ -145,6 +231,9 @@ function render() {
     for (const cb of form.querySelectorAll("#cat-checks input")) cb.checked = p.blockedCategories.includes(cb.value);
   }
 
+  const limitCount = Object.keys(p.categoryLimits || {}).length;
+  if (limitCount) $("#policy-summary").textContent += ` · ${limitCount} category limit${limitCount === 1 ? "" : "s"}`;
+  renderLimits();
   renderCart();
   ordersGrid?.setGridOption("rowData", [...state.orders].reverse());
   auditGrid?.setGridOption("rowData", [...state.audit].reverse());
@@ -199,6 +288,8 @@ const TOOL_LABELS = {
   propose_cart: (i) => `Building a cart with ${(i.items || []).length} item${(i.items || []).length === 1 ? "" : "s"}`,
   create_paypal_checkout: () => "Preparing PayPal checkout",
   refund_order: (i) => (i.skus?.length ? `Refunding ${i.skus.length} item${i.skus.length === 1 ? "" : "s"}` : "Refunding order"),
+  propose_policy_change: () => "Drafting a spending-rule change",
+  show_products: (i) => `Showing ${(i.products || []).length} options`,
 };
 
 // One collapsible "activity" block per run of tool calls.

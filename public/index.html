@@ -111,6 +111,14 @@
           <i data-lucide="chevron-down" class="chev"></i>
         </button>
         <form id="policy" class="policy" hidden>
+          <label class="field">Add a rule in plain English
+            <span class="input input-action">
+              <i data-lucide="sparkles"></i>
+              <input type="text" id="nl-rule" placeholder="e.g. Cap electronics at $50 a month" autocomplete="off" />
+              <button type="button" class="btn btn-primary btn-sm" id="nl-rule-btn">Ask</button>
+            </span>
+          </label>
+          <div class="limits" id="category-limits"></div>
           <div class="field-grid">
             <label class="field">Monthly budget<span class="input"><span>$</span><input type="number" name="monthlyBudget" min="0" step="10" /></span></label>
             <label class="field">Per order<span class="input"><span>$</span><input type="number" name="perOrderLimit" min="0" step="10" /></span></label>

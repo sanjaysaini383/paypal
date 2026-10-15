@@ -4,8 +4,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { audit, newId, spentThisMonth, VERIFIED_MERCHANTS } from "./store.js";
-import { checkCart, priceCart, TAX_RATE } from "./policy.js";
+import { audit, newId, spentThisMonth, categorySpendThisMonth, VERIFIED_MERCHANTS } from "./store.js";
+import { checkCart, priceCart, applyPolicyChanges, TAX_RATE, CATEGORIES as CATEGORY_LIST } from "./policy.js";
 import * as paypal from "./paypal.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -139,6 +139,38 @@ export const TOOL_DEFS = [
       required: ["order_id", "reason"],
     },
   },
+  {
+    name: "propose_policy_change",
+    description:
+      "Propose a change to the user's spending rules when they state a rule in plain language (e.g. 'never spend more than $50 a month on electronics', 'block gift cards', 'raise my budget to $800'). You cannot change rules yourself: this shows the user a confirmation card and nothing changes until they click Apply. Include only the fields that should change.",
+    input_schema: {
+      type: "object",
+      properties: {
+        monthly_budget: { type: "number", description: "New total monthly budget in USD." },
+        per_order_limit: { type: "number", description: "New maximum total per order in USD." },
+        max_item_price: { type: "number", description: "New maximum price for a single item in USD." },
+        min_rating: { type: "number", description: "New minimum product rating, 0-5." },
+        verified_merchants_only: { type: "boolean", description: "Only buy from verified merchants." },
+        block_categories: { type: "array", items: { type: "string", enum: CATEGORY_LIST }, description: "Categories to block entirely." },
+        unblock_categories: { type: "array", items: { type: "string", enum: CATEGORY_LIST }, description: "Categories to allow again." },
+        category_limits: {
+          type: "array",
+          description: "Monthly spending caps for specific categories (item prices before tax).",
+          items: {
+            type: "object",
+            properties: {
+              category: { type: "string", enum: CATEGORY_LIST },
+              monthly_limit: { type: "number", description: "Max USD per calendar month in this category." },
+            },
+            required: ["category", "monthly_limit"],
+          },
+        },
+        remove_category_limits: { type: "array", items: { type: "string", enum: CATEGORY_LIST }, description: "Categories whose monthly cap should be removed." },
+        summary: { type: "string", description: "One sentence describing the change, shown to the user." },
+      },
+      required: ["summary"],
+    },
+  },
 ];
 
 const round2 = (n) => Math.round(n * 100) / 100;
@@ -149,6 +181,7 @@ function walletStatus(session) {
     policy: session.policy,
     spent_this_month: spent,
     remaining_budget: round2(session.policy.monthlyBudget - spent),
+    category_spend_this_month: categorySpendThisMonth(session),
     paypal_mode: paypal.paypalMode,
     orders: session.orders.map((o) => ({
       order_id: o.orderId,
@@ -201,6 +234,29 @@ export const EXECUTORS = {
   async get_wallet_status(session) {
     audit(session, "agent", "get_wallet_status", "Read policy and spend");
     return walletStatus(session);
+  },
+
+  async propose_policy_change(session, input, emit) {
+    const { diff } = applyPolicyChanges(session.policy, input);
+    if (!diff.length) return { error: "That wouldn't change any rule. Check the current policy with get_wallet_status." };
+    const { summary, ...changes } = input;
+    const proposal = {
+      id: newId("rule"),
+      summary: String(summary || "Update spending rules").slice(0, 300),
+      diff,
+      changes, // re-applied to the policy as it is when the user clicks Apply
+      status: "pending",
+      createdAt: new Date().toISOString(),
+    };
+    session.policyProposals.set(proposal.id, proposal);
+    audit(session, "agent", "policy_proposed", `${proposal.summary} (${diff.map((d) => `${d.label}: ${d.from} → ${d.to}`).join("; ")})`);
+    emit({ type: "policy_proposal", proposal });
+    return {
+      proposal_id: proposal.id,
+      status: "waiting_for_user",
+      changes: diff,
+      note: "Shown to the user with Apply / Dismiss buttons. Nothing has changed yet; don't say the rule is active.",
+    };
   },
 
   async propose_cart(session, input, emit) {

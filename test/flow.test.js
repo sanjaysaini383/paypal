@@ -92,3 +92,27 @@ test("refunding every item one by one also refunds shipping", async () => {
   assert.equal(last.order_status, "REFUNDED");
   assert.equal(s.orders[0].refunded, cart.total);
 });
+
+test("category limits block carts that would exceed the monthly cap", async () => {
+  const s = getSession("test_category_limit");
+  s.policy.categoryLimits = { electronics: 100 };
+  const ok = await runTool(s, "propose_cart", { items: [{ sku: "ELC-EARBUDS", qty: 1 }], rationale: "x" }, noop);
+  assert.equal(ok.status, "proposed");
+  const over = await runTool(s, "propose_cart", { items: [{ sku: "ELC-EARBUDS", qty: 1 }, { sku: "ELC-MOUSE", qty: 1 }], rationale: "x" }, noop);
+  const v = over.violations.find((x) => x.rule === "category_limit");
+  assert.ok(v, "expected a category_limit violation");
+  assert.equal(v.over_by, 28); // 79 + 49 - 100
+});
+
+test("a proposed rule change does nothing until applied", async () => {
+  const s = getSession("test_rule_proposal");
+  const events = [];
+  const r = await runTool(s, "propose_policy_change", { category_limits: [{ category: "books", monthly_limit: 40 }], unblock_categories: ["gift_cards"], summary: "Cap books" }, (e) => events.push(e));
+  assert.equal(r.status, "waiting_for_user");
+  assert.deepEqual(r.changes.map((c) => c.label), ["Gift cards", "Books limit"]);
+  assert.deepEqual(s.policy.categoryLimits, {}); // unchanged until the user applies it
+  assert.ok(s.policy.blockedCategories.includes("gift_cards"));
+  assert.equal(events[0].type, "policy_proposal");
+  const none = await runTool(s, "propose_policy_change", { block_categories: ["gift_cards"], summary: "Already blocked" }, noop);
+  assert.ok(none.error, "a no-op change is rejected");
+});
