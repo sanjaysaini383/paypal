@@ -2,7 +2,7 @@ import "dotenv/config";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getSession, audit, spentThisMonth } from "./store.js";
+import { getSession, audit, spentThisMonth, categorySpendThisMonth, remember } from "./store.js";
 import { sanitizePolicy } from "./policy.js";
 import { runAgent, aiMode, MODEL } from "./agent.js";
 import * as paypal from "./paypal.js";
@@ -29,9 +29,12 @@ function snapshot(s) {
     policy: s.policy,
     spent,
     remaining: round2(s.policy.monthlyBudget - spent),
+    categorySpend: categorySpendThisMonth(s),
     carts: [...s.carts.values()].slice(-10),
+    proposals: [...s.policyProposals.values()].slice(-20),
     orders: s.orders,
     audit: s.audit,
+    transcript: s.transcript,
   };
 }
 
@@ -69,15 +72,54 @@ app.post("/api/chat", async (req, res) => {
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
+  // Everything the chat shows is also kept in the session transcript, so a
+  // page reload can restore the conversation. Tool steps are grouped into one
+  // "activity" entry per run, like the UI does.
+  let activity = null;
+  const flush = () => {
+    if (!activity) return;
+    const secs = Math.max(1, Math.round((Date.now() - activity.started) / 1000));
+    remember(s, { role: "activity", secs, steps: activity.steps.map(({ name, input, ok, summary }) => ({ name, input, ok, summary })) });
+    activity = null;
+  };
+  const record = (event) => {
+    switch (event.type) {
+      case "text":
+      case "error":
+      case "thinking":
+        flush();
+        remember(s, { role: event.type === "text" ? "agent" : event.type, text: event.text });
+        break;
+      case "tool_call":
+        (activity ||= { started: Date.now(), steps: [] }).steps.push({ id: event.id, name: event.name, input: event.input });
+        break;
+      case "tool_result": {
+        const step = activity?.steps.find((x) => x.id === event.id);
+        if (step) Object.assign(step, { ok: event.ok, summary: event.summary });
+        break;
+      }
+      case "products":
+        flush();
+        remember(s, { role: "products", title: event.title, items: event.items });
+        break;
+      case "policy_proposal":
+        flush();
+        remember(s, { role: "policy_proposal", proposalId: event.proposal.id });
+        break;
+    }
+  };
   const emit = (event) => {
+    record(event);
     if (!res.writableEnded) res.write(JSON.stringify(event) + "\n");
   };
+  remember(s, { role: "user", text: message });
   try {
     await runAgent(s, message, emit);
   } catch (err) {
     console.error(err);
     emit({ type: "error", text: err.message || "Agent error" });
   } finally {
+    flush();
     s.busy = false;
     emit({ type: "done" });
     res.end();
@@ -142,6 +184,7 @@ app.post("/api/orders/:orderId/capture", async (req, res) => {
     s.orders.push(order);
     audit(s, "paypal", "captured", `Captured ${cap.captureId} for $${cart.total.toFixed(2)} (order ${cap.orderId})${cap.debugId ? ` debug ${cap.debugId}` : ""}`);
     s.pendingEvents.push(`The user approved and paid PayPal order ${order.orderId} ($${order.total.toFixed(2)}).`);
+    remember(s, { role: "agent", text: `Payment complete: **$${order.total.toFixed(2)}** paid with PayPal. You'll find the order in Purchases below.` });
     res.json({ ok: true, order, state: snapshot(s) });
   } catch (err) {
     cart.status = "checkout"; // unlock so the buyer can retry (e.g. another card)
@@ -158,6 +201,8 @@ app.post("/api/reset", (req, res) => {
   s.oaMessages = [];
   s.pendingEvents = [];
   s.carts.clear();
+  s.policyProposals.clear();
+  s.transcript = [];
   audit(s, "user", "conversation_reset", "Started a new conversation");
   res.json(snapshot(s));
 });

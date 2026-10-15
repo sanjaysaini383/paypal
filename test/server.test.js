@@ -12,7 +12,7 @@ before(async () => {
   const blank = Object.fromEntries(
     ["ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "AI_API_KEY", "PAYPAL_CLIENT_ID", "PAYPAL_CLIENT_SECRET"].map((k) => [k, ""]),
   );
-  server = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, ...blank, AI_PROVIDER: "offline", PORT: String(PORT) } });
+  server = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, ...blank, AI_PROVIDER: "offline", PERSIST: "0", PORT: String(PORT) } });
   await new Promise((resolve, reject) => {
     server.stdout.on("data", (d) => String(d).includes("running") && resolve());
     server.on("exit", (code) => reject(new Error(`server exited ${code}`)));

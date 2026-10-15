@@ -15,8 +15,10 @@ const Motion = window.Motion;
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const canAnimate = !!Motion && !reduceMotion;
 
+let restoring = false; // true while replaying saved history: no entrance animations
+
 function enter(els, { y = 8, delay = 0, stagger = 0, duration = 0.32 } = {}) {
-  if (!canAnimate || !els || (els.length === 0)) return;
+  if (!canAnimate || restoring || !els || els.length === 0) return;
   Motion.animate(els, { opacity: [0, 1], y: [y, 0] }, { duration, delay: stagger ? Motion.stagger(stagger, { startDelay: delay }) : delay, ease: [0.22, 1, 0.36, 1] });
 }
 
@@ -107,8 +109,13 @@ async function boot() {
   initGrids();
   moveTabIndicator(false);
   await refresh();
+  renderHistory(state.transcript);
   if (config.paypalMode === "sandbox") loadPayPalSdk();
 }
+
+// Filled in by the product-card and rule-proposal features below.
+function renderProducts() {}
+function renderProposal() {}
 
 async function refresh() {
   state = await (await api("/api/state")).json();
@@ -209,8 +216,8 @@ function createActivity() {
     list: $("ol", block),
     steps: 0,
     failed: 0,
-    finish() {
-      const secs = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+    finish(savedSecs) {
+      const secs = savedSecs || Math.max(1, Math.round((Date.now() - startedAt) / 1000));
       const summary = $("summary", block);
       summary.innerHTML = `${icon(this.failed ? "circle-alert" : "circle-check")}<span>${this.steps} step${this.steps === 1 ? "" : "s"} · ${secs}s</span>${icon("chevron-down")}`;
       $("[data-lucide]", summary)?.setAttribute("style", `color: var(--${this.failed ? "warn" : "ok"})`);
@@ -218,6 +225,55 @@ function createActivity() {
       block.open = false;
     },
   };
+}
+
+function addStep(activity, { name, input }) {
+  activity.steps++;
+  const li = document.createElement("li");
+  li.className = "step pending";
+  const label = TOOL_LABELS[name]?.(input || {}) || name;
+  li.innerHTML = `<span class="ic">${icon(TOOL_ICONS[name] || "sparkles")}</span><span class="lbl">${esc(label)}</span><span class="res"><span class="spinner"></span></span>`;
+  activity.list.append(li);
+  refreshIcons();
+  enter(li, { y: 4, duration: 0.2 });
+  return li;
+}
+
+function completeStep(activity, li, { ok, summary }) {
+  const warn = /suspicious|Blocked/.test(summary || "");
+  li.className = "step " + (!ok ? "bad" : warn ? "warn" : "ok");
+  if (!ok && activity) activity.failed++;
+  $(".res", li).innerHTML = `<span>${esc(summary || "")}</span>${icon(!ok ? "circle-x" : warn ? "triangle-alert" : "check")}`;
+  refreshIcons();
+}
+
+// Rebuild the conversation from the server's saved transcript (page reload).
+function renderHistory(entries) {
+  if (!entries?.length) return;
+  restoring = true;
+  $("#welcome")?.remove();
+  for (const e of entries) {
+    if (e.role === "user") addRow("user", esc(e.text));
+    else if (e.role === "agent") addRow("agent", formatText(e.text));
+    else if (e.role === "error") addRow("error", esc(e.text));
+    else if (e.role === "thinking") {
+      const d = document.createElement("details");
+      d.className = "reasoning";
+      d.innerHTML = `<summary>${icon("brain")}Reasoning</summary><div>${esc(e.text)}</div>`;
+      messagesEl.append(d);
+    } else if (e.role === "activity") {
+      const a = createActivity();
+      for (const step of e.steps) completeStep(a, addStep(a, step), step);
+      a.finish(e.secs);
+    } else if (e.role === "products") renderProducts(e);
+    else if (e.role === "policy_proposal") {
+      const p = state.proposals.find((x) => x.id === e.proposalId);
+      if (p) renderProposal(p);
+    }
+  }
+  restoring = false;
+  refreshIcons();
+  scrollDown();
 }
 
 async function send(text) {
@@ -260,31 +316,25 @@ async function send(text) {
         closeActivity();
         addRow("agent", formatText(ev.text));
         break;
-      case "tool_call": {
+      case "tool_call":
         activity ||= createActivity();
-        activity.steps++;
-        const li = document.createElement("li");
-        li.className = "step pending";
-        const label = TOOL_LABELS[ev.name]?.(ev.input || {}) || ev.name;
-        li.innerHTML = `<span class="ic">${icon(TOOL_ICONS[ev.name] || "sparkles")}</span><span class="lbl">${esc(label)}</span><span class="res"><span class="spinner"></span></span>`;
-        activity.list.append(li);
-        stepEls.set(ev.id, li);
-        refreshIcons();
-        enter(li, { y: 4, duration: 0.2 });
+        stepEls.set(ev.id, addStep(activity, ev));
         break;
-      }
       case "tool_result": {
         const li = stepEls.get(ev.id);
-        if (li) {
-          const warn = /suspicious|Blocked/.test(ev.summary || "");
-          li.className = "step " + (!ev.ok ? "bad" : warn ? "warn" : "ok");
-          if (!ev.ok && activity) activity.failed++;
-          $(".res", li).innerHTML = `<span>${esc(ev.summary)}</span>${icon(!ev.ok ? "circle-x" : warn ? "triangle-alert" : "check")}`;
-          refreshIcons();
-        }
+        if (li) completeStep(activity, li, ev);
         if (ev.name !== "search_catalog") refresh();
         break;
       }
+      case "products":
+        closeActivity();
+        renderProducts(ev);
+        break;
+      case "policy_proposal":
+        closeActivity();
+        state?.proposals?.push(ev.proposal);
+        renderProposal(ev.proposal);
+        break;
       case "cart":
       case "checkout":
         refresh();
