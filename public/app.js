@@ -344,6 +344,7 @@ function render() {
   ordersGrid?.setGridOption("rowData", [...state.orders].reverse());
   auditGrid?.setGridOption("rowData", [...state.audit].reverse());
   $("#audit-count").textContent = state.audit.length;
+  renderInsights();
 }
 
 // ------------------------------------------------------------------ chat
@@ -811,6 +812,7 @@ function gridTheme() {
   return dark ? base.withPart(agGrid.colorSchemeDark) : base;
 }
 function applyGridTheme() {
+  renderInsights(); // charts follow the theme too
   if (!ordersGrid) return;
   ordersGrid.setGridOption("theme", gridTheme());
   auditGrid.setGridOption("theme", gridTheme());
@@ -871,6 +873,157 @@ function initGrids() {
   });
 }
 
+// ------------------------------------------------------------------ insights (AG Charts)
+const charts = {};
+const chartView = { category: "chart", daily: "chart" };
+const CAT_LABELS = { outdoor: "Outdoor", electronics: "Electronics", home: "Home", grocery: "Grocery", gift_cards: "Gift cards", books: "Books" };
+const sameMonth = (iso) => {
+  const d = new Date(iso);
+  const now = new Date();
+  return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+};
+
+function insightsData() {
+  const byCat = {};
+  for (const o of state.orders.filter((o) => sameMonth(o.capturedAt)))
+    for (const i of o.items) if (!i.refunded) byCat[i.category] = (byCat[i.category] || 0) + i.price * i.qty;
+  const category = Object.entries(byCat)
+    .map(([c, amount]) => ({ label: CAT_LABELS[c] || c, amount: Math.round(amount * 100) / 100 }))
+    .sort((a, b) => b.amount - a.amount);
+
+  const days = [];
+  for (let n = 13; n >= 0; n--) {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - n);
+    days.push({ key: d.toDateString(), label: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }), amount: 0 });
+  }
+  for (const o of state.orders) {
+    const day = days.find((x) => x.key === new Date(o.capturedAt).toDateString());
+    if (day) day.amount = Math.round((day.amount + o.total - o.refunded) * 100) / 100;
+  }
+  return { category, daily: days };
+}
+
+function renderStats() {
+  const monthOrders = state.orders.filter((o) => sameMonth(o.capturedAt));
+  const refunded = state.orders.reduce((s, o) => s + o.refunded, 0);
+  const blocks = state.audit.filter((a) => a.outcome === "blocked").length;
+  const scams = new Set(state.audit.filter((a) => a.action === "injection_flag").map((a) => a.detail)).size;
+  const tiles = [
+    ["Spent this month", fmt(state.spent), `of ${fmt(state.policy.monthlyBudget)} budget`, "wallet"],
+    ["Orders", String(monthOrders.length), "paid this month", "receipt"],
+    ["Refunded", fmt(refunded), `${state.orders.filter((o) => o.refunded).length} order(s)`, "undo-2"],
+    ["Blocked by your rules", String(blocks), "carts, checkouts or payments", "shield-ban"],
+    ["Scam listings caught", String(scams), "flagged before buying", "scan-search"],
+  ];
+  $("#stats").innerHTML = tiles
+    .map(([label, value, sub, ic]) => `<div class="stat"><span class="stat-label">${icon(ic)}${label}</span><span class="stat-value">${value}</span><span class="stat-sub">${sub}</span></div>`)
+    .join("");
+  refreshIcons();
+}
+
+function chartColors() {
+  const dark = effectiveTheme() === "dark";
+  return {
+    dark,
+    mark: dark ? "#7c7ff5" : "#4f46e5", // validated against each surface (dataviz validator)
+    text: dark ? "#a1a1aa" : "#71717a",
+    grid: dark ? "#232327" : "#ececee",
+  };
+}
+
+// Approximate plot length along the category axis (container minus axis band).
+const PLOT_EXTENT = { category: 190, daily: 560 };
+
+function chartOptions(kind, data) {
+  const c = chartColors();
+  const horizontal = kind === "category";
+  const font = "Inter, system-ui, sans-serif";
+  return {
+    container: $(`#chart-${kind}`),
+    data,
+    theme: { baseTheme: c.dark ? "ag-default-dark" : "ag-default", overrides: { common: { background: { fill: "transparent" } } } },
+    padding: { top: 8, right: horizontal ? 56 : 12, bottom: 4, left: 4 },
+    series: [
+      {
+        type: "bar",
+        direction: horizontal ? "horizontal" : "vertical",
+        xKey: "label",
+        yKey: "amount",
+        yName: horizontal ? "Spent" : "Net spend",
+        fill: c.mark,
+        strokeWidth: 0,
+        cornerRadius: 4,
+        label: horizontal
+          ? { enabled: true, placement: "outside-end", color: c.text, fontFamily: font, fontSize: 12, padding: 8, formatter: ({ value }) => fmt(value) }
+          : { enabled: false },
+        tooltip: { renderer: ({ datum }) => ({ heading: datum.label, title: horizontal ? "Spent" : "Net spend", data: [{ label: "Amount", value: fmt(datum.amount) }] }) },
+      },
+    ],
+    axes: [
+      {
+        type: "category",
+        position: horizontal ? "left" : "bottom",
+        // Keep bars <= 24px thick whatever the number of categories (band = plot / n).
+        paddingInner: Math.min(0.85, Math.max(0.3, 1 - 24 / (PLOT_EXTENT[kind] / Math.max(1, data.length)))),
+        paddingOuter: 0.2,
+        line: { width: 0 },
+        tick: { width: 0 },
+        label: { color: c.text, fontFamily: font, fontSize: 12 },
+      },
+      {
+        type: "number",
+        position: horizontal ? "bottom" : "left",
+        nice: true,
+        line: { width: 0 },
+        tick: { width: 0 },
+        gridLine: { style: [{ stroke: c.grid, lineDash: [] }] },
+        label: { color: c.text, fontFamily: font, fontSize: 11, formatter: ({ value }) => (value >= 1000 ? `$${(value / 1000).toFixed(1)}K` : `$${value}`) },
+      },
+    ],
+    legend: { enabled: false },
+  };
+}
+
+function renderTable(kind, rows, header) {
+  $(`#table-${kind}`).innerHTML = `<table><thead><tr><th>${header}</th><th>Amount</th></tr></thead><tbody>${
+    rows.length ? rows.map((r) => `<tr><td>${esc(r.label)}</td><td>${fmt(r.amount)}</td></tr>`).join("") : `<tr><td colspan="2" class="muted">No purchases yet</td></tr>`
+  }</tbody></table>`;
+}
+
+function renderInsights() {
+  if (!state || $("#insights").hidden) return;
+  renderStats();
+  const { category, daily } = insightsData();
+  const datasets = { category, daily };
+  renderTable("category", category, "Category");
+  renderTable("daily", daily.filter((d) => d.amount), "Day");
+  for (const kind of ["category", "daily"]) {
+    const el = $(`#chart-${kind}`);
+    const empty = kind === "category" ? !category.length : !daily.some((d) => d.amount);
+    el.classList.toggle("is-empty", empty);
+    el.dataset.empty = "No purchases yet. Paid orders show up here.";
+    if (empty || !window.agCharts) continue;
+    const options = chartOptions(kind, datasets[kind]);
+    if (charts[kind]) charts[kind].update(options);
+    else charts[kind] = agCharts.AgCharts.create(options);
+  }
+}
+
+document.querySelectorAll(".view-toggle").forEach((btn) =>
+  btn.addEventListener("click", () => {
+    const kind = btn.dataset.chart;
+    chartView[kind] = chartView[kind] === "chart" ? "table" : "chart";
+    const table = chartView[kind] === "table";
+    $(`#chart-${kind}`).hidden = table;
+    $(`#table-${kind}`).hidden = !table;
+    btn.innerHTML = `${icon(table ? "chart-column" : "table-2")}${table ? "Chart" : "Table"}`;
+    refreshIcons();
+    if (!table) renderInsights();
+  }),
+);
+
 function moveTabIndicator(animated = true) {
   const active = $(".tab.active");
   const ind = $("#tab-indicator");
@@ -887,7 +1040,9 @@ document.querySelectorAll(".tab").forEach((tab) =>
     });
     $("#orders-grid").hidden = tab.dataset.tab !== "orders";
     $("#audit-grid").hidden = tab.dataset.tab !== "audit";
+    $("#insights").hidden = tab.dataset.tab !== "insights";
     moveTabIndicator();
+    renderInsights();
   }),
 );
 addEventListener("resize", () => moveTabIndicator(false));

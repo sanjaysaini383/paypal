@@ -15,6 +15,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
   <script defer src="https://cdn.jsdelivr.net/npm/ag-grid-community@33.3.2/dist/ag-grid-community.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/ag-charts-community@11.3.2/dist/umd/ag-charts-community.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/motion@11.11.17/dist/motion.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js"></script>
 </head>
@@ -144,6 +145,7 @@
       <div class="card-head">
         <div class="tabs" role="tablist">
           <button role="tab" class="tab active" data-tab="orders" aria-selected="true"><i data-lucide="receipt"></i>Purchases</button>
+          <button role="tab" class="tab" data-tab="insights" aria-selected="false"><i data-lucide="chart-column"></i>Insights</button>
           <button role="tab" class="tab" data-tab="audit" aria-selected="false"><i data-lucide="list-checks"></i>Audit log <span class="count" id="audit-count">0</span></button>
           <span class="tab-indicator" id="tab-indicator"></span>
         </div>
@@ -151,6 +153,23 @@
       </div>
       <div id="orders-grid" class="grid"></div>
       <div id="audit-grid" class="grid" hidden></div>
+      <div id="insights" class="insights" hidden>
+        <div class="stats" id="stats"></div>
+        <div class="charts">
+          <figure class="chart-card">
+            <figcaption><span><strong>Spending by category</strong><small>This month, item prices after refunds</small></span>
+              <button type="button" class="btn btn-ghost btn-sm view-toggle" data-chart="category"><i data-lucide="table-2"></i>Table</button></figcaption>
+            <div class="chart" id="chart-category"></div>
+            <div class="chart-table" id="table-category" hidden></div>
+          </figure>
+          <figure class="chart-card">
+            <figcaption><span><strong>Spending by day</strong><small>Last 14 days, net of refunds</small></span>
+              <button type="button" class="btn btn-ghost btn-sm view-toggle" data-chart="daily"><i data-lucide="table-2"></i>Table</button></figcaption>
+            <div class="chart" id="chart-daily"></div>
+            <div class="chart-table" id="table-daily" hidden></div>
+          </figure>
+        </div>
+      </div>
     </section>
   </main>
 
