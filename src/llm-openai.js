@@ -43,6 +43,7 @@ export function openAIConfig(provider) {
       ? process.env.AI_FALLBACK_MODELS.split(",").map((m) => m.trim()).filter(Boolean)
       : p.fallbackModels || [],
     reasoningEffort: process.env.AI_REASONING_EFFORT ?? p.reasoningEffort,
+    timeoutMs: Number(process.env.AI_TIMEOUT_MS) || 45_000,
   };
 }
 
@@ -81,11 +82,20 @@ async function completeOne(cfg, body, canFallback) {
   const maxWait = canFallback ? 12_000 : 60_000;
   // Free tiers rate limit aggressively: back off and retry on 429.
   for (let attempt = 0; ; attempt++) {
-    const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${cfg.apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    let res;
+    try {
+      res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${cfg.apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        // An overloaded model can take minutes to answer; give up and use the next one.
+        signal: AbortSignal.timeout(cfg.timeoutMs || 45_000),
+      });
+    } catch (err) {
+      const reason = err.name === "TimeoutError" ? "timed out" : "unreachable";
+      if (canFallback) throw new UnavailableError(`${body.model} ${reason}`, 3 * 60_000);
+      throw new Error(`${cfg.provider}: the model ${reason === "timed out" ? "took too long to answer" : "couldn't be reached"}. Try again in a minute.`);
+    }
     if (res.ok) return res.json();
     const text = await res.text();
     // Groq rejects malformed tool calls (e.g. gpt-oss emitting a garbled tool

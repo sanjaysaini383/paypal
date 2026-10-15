@@ -21,7 +21,9 @@ before(async () => {
     req.on("end", () => {
       const json = JSON.parse(body);
       requests.push(json);
-      const [status, payload] = respond(json);
+      const answer = respond(json);
+      if (answer === "hang") return; // never respond: simulates a stalled model
+      const [status, payload] = answer;
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(payload));
     });
@@ -29,7 +31,10 @@ before(async () => {
   await new Promise((r) => server.listen(0, r));
   baseUrl = `http://localhost:${server.address().port}`;
 });
-after(() => server.close());
+after(() => {
+  server.closeAllConnections();
+  server.close();
+});
 
 const reply = (message) => [200, { choices: [{ message: { role: "assistant", ...message }, finish_reason: message.tool_calls ? "tool_calls" : "stop" }] }];
 const toolCall = (id, name, args) => ({ id, type: "function", function: { name, arguments: JSON.stringify(args) }, extra_content: { google: { thought_signature: "sig" } } });
@@ -72,4 +77,14 @@ test("a failed turn is dropped from history so the next message still works", as
   const cfg = { provider: "test", baseUrl, apiKey: "k", model: "good-model-2", fallbackModels: [] };
   await assert.rejects(run(cfg, "llm_rollback", "hello"), /API error 400/);
   assert.equal(getSession("llm_rollback").oaMessages.length, 0);
+});
+
+test("a model that answers too slowly is skipped for the next one", async () => {
+  requests.length = 0;
+  respond = (body) => (body.model === "slow-model" ? "hang" : reply({ content: "Quick answer." }));
+  const cfg = { provider: "test", baseUrl, apiKey: "k", model: "slow-model", fallbackModels: ["fast-model"], timeoutMs: 300 };
+  const t0 = Date.now();
+  const events = await run(cfg, "llm_timeout", "hello");
+  assert.equal(events.at(-1).text, "Quick answer.");
+  assert.ok(Date.now() - t0 < 3000, "should not wait for the slow model");
 });
