@@ -754,6 +754,9 @@ const paypalWaiters = [];
 function loadPayPalSdk() {
   const s = document.createElement("script");
   s.src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(config.paypalClientId)}&currency=USD&intent=capture&components=buttons`;
+  // Sandbox only: show the US checkout everywhere, so testers outside the US
+  // (e.g. India, where PayPal blocks domestic payments) get the same flow.
+  if (config.paypalMode === "sandbox") s.src += "&buyer-country=US";
   s.onload = () => {
     paypalReady = true;
     paypalWaiters.splice(0).forEach((f) => f());

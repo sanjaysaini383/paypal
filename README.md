@@ -92,7 +92,7 @@ cp .env.example .env       # optional: add keys (see below)
 npm start                  # http://localhost:3000
 ```
 
-It runs in three configurations, and the header badges show which one is active:
+It runs in three configurations, and the startup log shows which one is active:
 
 | AI key (`GEMINI_API_KEY` or `ANTHROPIC_API_KEY`) | PayPal credentials | Experience |
 |---|---|---|
@@ -106,7 +106,9 @@ It runs in three configurations, and the header badges show which one is active:
 
 1. Sign in at [developer.paypal.com](https://developer.paypal.com/dashboard/) → **Apps & Credentials** → **Sandbox** → **Create App** (type: Merchant).
 2. Copy the **Client ID** and **Secret** into `.env` as `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET`.
-3. Under **Testing Tools → Sandbox Accounts**, use the default **Personal** account (or create one) to log in when the PayPal popup opens.
+3. Under **Testing Tools → Sandbox Accounts**, click **Create account** → **Personal (Buyer)** → country **United States**. Open the account's **⋮ → View/Edit account** to see its email and password, and log in with those when the PayPal popup opens. Sandbox money is fake, so this works from any country, including India.
+
+> **Outside the US?** Use a sandbox buyer account, not your real PayPal login. Real accounts can't sign in to sandbox, which causes a login loop. In sandbox the app also adds `buyer-country=US` to the PayPal script, so the checkout looks the same everywhere. No PayPal keys at all? The app switches to its built-in payment simulator.
 
 ### Try these prompts
 
