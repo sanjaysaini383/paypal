@@ -939,7 +939,15 @@ function chartColors() {
 // Approximate plot length along the category axis (container minus axis band).
 const PLOT_EXTENT = { category: 190, daily: 560 };
 
-function chartOptions(kind, data) {
+// A lone band ignores inner padding and fills the plot, so the category chart
+// always has at least this many rows; the extra rows are blank.
+const MIN_CATEGORY_ROWS = 5;
+
+function chartOptions(kind, rows) {
+  const data =
+    kind === "category" && rows.length < MIN_CATEGORY_ROWS
+      ? [...rows, ...Array.from({ length: MIN_CATEGORY_ROWS - rows.length }, (_, i) => ({ label: " ".repeat(i + 1), amount: 0 }))]
+      : rows;
   const c = chartColors();
   const horizontal = kind === "category";
   const font = "Inter, system-ui, sans-serif";
@@ -959,7 +967,7 @@ function chartOptions(kind, data) {
         strokeWidth: 0,
         cornerRadius: 4,
         label: horizontal
-          ? { enabled: true, placement: "outside-end", color: c.text, fontFamily: font, fontSize: 12, padding: 8, formatter: ({ value }) => fmt(value) }
+          ? { enabled: true, placement: "outside-end", color: c.text, fontFamily: font, fontSize: 12, padding: 8, formatter: ({ datum, value }) => (datum.label.trim() ? fmt(value) : "") }
           : { enabled: false },
         tooltip: { renderer: ({ datum }) => ({ heading: datum.label, title: horizontal ? "Spent" : "Net spend", data: [{ label: "Amount", value: fmt(datum.amount) }] }) },
       },
