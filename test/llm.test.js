@@ -79,6 +79,15 @@ test("a failed turn is dropped from history so the next message still works", as
   assert.equal(getSession("llm_rollback").oaMessages.length, 0);
 });
 
+test("a brief overload on every model is waited out instead of failing", async () => {
+  requests.length = 0;
+  respond = () => (requests.length <= 2 ? [503, { error: { message: "high demand" } }] : reply({ content: "Back again." }));
+  const cfg = { provider: "test", baseUrl, apiKey: "k", model: "spiky-model", fallbackModels: [], overloadRetryMs: 10 };
+  const events = await run(cfg, "llm_spike", "hello");
+  assert.equal(events.at(-1).text, "Back again.");
+  assert.equal(requests.length, 3);
+});
+
 test("a model that answers too slowly is skipped for the next one", async () => {
   requests.length = 0;
   respond = (body) => (body.model === "slow-model" ? "hang" : reply({ content: "Quick answer." }));

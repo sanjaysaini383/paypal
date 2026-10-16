@@ -130,17 +130,25 @@ const unavailableUntil = new Map();
 
 async function complete(cfg, body) {
   const all = [cfg.model, ...cfg.fallbackModels];
-  const healthy = all.filter((m) => !(unavailableUntil.get(m) > Date.now()));
-  const queue = healthy.length ? healthy : all;
   let last;
-  for (const [i, model] of queue.entries()) {
-    try {
-      return await completeOne(cfg, { ...body, model }, i < queue.length - 1);
-    } catch (err) {
-      if (!(err instanceof UnavailableError)) throw err;
-      unavailableUntil.set(model, Date.now() + err.retryMs);
-      console.warn(`[${cfg.provider}] ${err.message}, trying the next model`);
-      last = err;
+  // Overload spikes usually pass within seconds, so when every model is busy
+  // wait and go round again before giving up. Quota limits last far longer.
+  for (let round = 0; round < 3; round++) {
+    if (round) {
+      if (/rate limited/.test(last?.message)) break;
+      await sleep((cfg.overloadRetryMs ?? 4000) * round);
+    }
+    const healthy = all.filter((m) => !(unavailableUntil.get(m) > Date.now()));
+    const queue = healthy.length ? healthy : all;
+    for (const [i, model] of queue.entries()) {
+      try {
+        return await completeOne(cfg, { ...body, model }, i < queue.length - 1);
+      } catch (err) {
+        if (!(err instanceof UnavailableError)) throw err;
+        unavailableUntil.set(model, Date.now() + err.retryMs);
+        console.warn(`[${cfg.provider}] ${err.message}, trying the next model`);
+        last = err;
+      }
     }
   }
   throw new Error(

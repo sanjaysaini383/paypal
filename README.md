@@ -126,7 +126,7 @@ It runs in three configurations, and the startup log shows which one is active:
 npm test
 ```
 
-17 tests: pricing, injection flagging, every guardrail rule incl. category limits, checkout → capture → partial refund, double-click and cancelled-cart capture, plain-English rule proposals, user cart edits, model fallback and timeouts, and restart persistence (simulated PayPal, no keys needed).
+18 tests: pricing, injection flagging, every guardrail rule incl. category limits, checkout → capture → partial refund, double-click and cancelled-cart capture, plain-English rule proposals, user cart edits, model fallback, overload retries and timeouts, and restart persistence (simulated PayPal, no keys needed).
 
 ## Deploy (Render)
 
