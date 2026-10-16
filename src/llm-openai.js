@@ -139,7 +139,8 @@ async function complete(cfg, body) {
       await sleep((cfg.overloadRetryMs ?? 4000) * round);
     }
     const healthy = all.filter((m) => !(unavailableUntil.get(m) > Date.now()));
-    const queue = healthy.length ? healthy : all;
+    // All busy: try the one that frees up soonest, not ones out of daily quota.
+    const queue = healthy.length ? healthy : [all.reduce((a, b) => ((unavailableUntil.get(b) ?? 0) < (unavailableUntil.get(a) ?? 0) ? b : a))];
     for (const [i, model] of queue.entries()) {
       try {
         return await completeOne(cfg, { ...body, model }, i < queue.length - 1);
