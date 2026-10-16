@@ -11,9 +11,9 @@ CartPilot
 CartPilot: an AI shopping agent that finds, compares and buys with PayPal, inside spending rules it can't break. You approve every payment.
 
 ## Links
-- Live demo: `<your Render URL>`
+- Live demo: https://paypal-lac.vercel.app/
 - Source: https://github.com/sanjaysaini383/paypal (MIT licensed)
-- Video: `<your YouTube URL>` (under 3 minutes)
+- Video: https://youtu.be/Y9EaBk-Xzmc (under 3 minutes)
 
 ---
 

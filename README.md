@@ -6,7 +6,7 @@ You tell CartPilot what you need ("a camping setup for two, under $300"). It sea
 
 Every agent decision runs through a **server-side guardrail engine**. Budgets, per-order limits, blocked categories, verified-merchant rules and minimum ratings are enforced outside the model. A confused or prompt-injected agent still can't spend money you didn't allow.
 
-> Built for the [PayPal AI Hackathon](https://paypalaihackathon.devpost.com/) · **Live demo:** _add your Render URL_ · **Video:** _add your YouTube link_
+> Built for the [PayPal AI Hackathon](https://paypalaihackathon.devpost.com/) · **Live demo:** [paypal-lac.vercel.app](https://paypal-lac.vercel.app/) · **Video:** [youtu.be/Y9EaBk-Xzmc](https://youtu.be/Y9EaBk-Xzmc)
 
 ![Agent building a camping cart with PayPal checkout](docs/checkout.png)
 
