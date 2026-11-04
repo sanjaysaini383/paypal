@@ -12,6 +12,7 @@ import { publicAuthorization, expireStale } from "./authorization.js";
 import { receiveWebhook } from "./webhooks.js";
 import { detectPurchaseIntent } from "./validate.js";
 import { analytics, parseFilters } from "./analytics.js";
+import { securityHeaders, sameOrigin, writeLimiter, notFound, errorHandler } from "./http.js";
 import { CATALOG, MERCHANTS } from "./catalog.js";
 import { assessListing, merchantReputation, RISK_ENGINE_VERSION } from "./risk.js";
 
@@ -19,6 +20,9 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 // Hosts like Render sit behind one proxy; trust it so req.ip is the client.
 app.set("trust proxy", 1);
+app.disable("x-powered-by");
+app.use(securityHeaders);
+app.use("/api", sameOrigin, writeLimiter());
 
 // PayPal webhooks need the raw body for signature verification, so this route
 // is registered before the JSON parser. No session: events are verified with
@@ -32,10 +36,12 @@ app.post("/api/webhooks/paypal", express.raw({ type: () => true, limit: "256kb" 
 app.use(express.json({ limit: "32kb" }));
 app.use(express.static(path.join(here, "..", "public")));
 
-// Session id comes from the browser (random UUID kept in localStorage).
+// Session id comes from the browser (random UUID kept in localStorage). It is
+// the bearer secret for that session, so short, guessable ids are refused
+// (the request gets a fresh, empty session instead).
 function session(req) {
   const raw = String(req.get("x-session-id") || "");
-  const id = /^[a-zA-Z0-9_-]{8,64}$/.test(raw) ? raw : undefined;
+  const id = /^[a-zA-Z0-9_-]{16,64}$/.test(raw) ? raw : undefined;
   return getSession(id);
 }
 
@@ -258,6 +264,8 @@ app.post("/api/reset", (req, res) => {
 });
 
 app.get("/healthz", (req, res) => res.send("ok"));
+app.use("/api", notFound);
+app.use(errorHandler);
 
 const port = Number(process.env.PORT || 3000);
 app.listen(port, () => {

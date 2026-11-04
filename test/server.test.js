@@ -99,3 +99,53 @@ test("user cart edits go through the same guardrails", async () => {
   assert.ok(events.some((e) => e.type === "checkout"), "the current cart checks out");
   assert.ok(old, "earlier carts are retired, not left open");
 });
+
+test("responses carry security headers and a CSP without inline scripts", async () => {
+  const res = await fetch(BASE + "/");
+  assert.equal(res.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(res.headers.get("x-frame-options"), "DENY");
+  const csp = res.headers.get("content-security-policy");
+  assert.match(csp, /script-src 'self' https:\/\/cdn\.jsdelivr\.net https:\/\/\*\.paypal\.com/);
+  assert.doesNotMatch(csp.split(";").find((d) => d.includes("script-src")), /unsafe-inline/);
+  assert.ok(!(await res.text()).match(/<script>(?!<\/script>)/), "no inline <script> blocks");
+  assert.equal(res.headers.get("x-powered-by"), null);
+});
+
+test("malformed JSON and unknown routes get JSON errors without internals", async () => {
+  const bad = await fetch(BASE + "/api/policy", { method: "PUT", headers: { "Content-Type": "application/json", "X-Session-Id": "test_bad_json_session" }, body: "{oops" });
+  assert.equal(bad.status, 400);
+  assert.deepEqual(await bad.json(), { error: "Malformed request body." });
+  const missing = await api("test_missing_route_x", "/api/nope");
+  assert.equal(missing.status, 404);
+  assert.deepEqual(await missing.json(), { error: "Not found" });
+});
+
+test("cross-origin writes are refused", async () => {
+  const res = await api("test_cross_origin_sess", "/api/reset", { method: "POST", headers: { Origin: "https://evil.example" } });
+  assert.equal(res.status, 403);
+  const same = await api("test_cross_origin_sess", "/api/reset", { method: "POST", headers: { Origin: BASE } });
+  assert.equal(same.status, 200);
+});
+
+test("short, guessable session ids are not honoured", async () => {
+  await api("test_short_id_owner", "/api/cart/items", { method: "POST", body: JSON.stringify({ sku: "OUT-LAMP" }) });
+  const res = await api("short123", "/api/state");
+  assert.equal((await res.json()).carts.length, 0);
+});
+
+test("one session can't see or touch another session's money", async () => {
+  const owner = "test_isolation_owner";
+  const stranger = "test_isolation_stranger";
+  const orderId = await checkoutOrderId(owner);
+  assert.equal((await api(owner, `/api/orders/${orderId}/capture`, { method: "POST" })).status, 200);
+  const theirs = await (await api(stranger, "/api/state")).json();
+  assert.equal(theirs.orders.length, 0);
+  assert.equal(theirs.authorizations.length, 0);
+  assert.ok(!theirs.audit.some((a) => a.detail.includes(orderId)));
+  const analytics = await (await api(stranger, "/api/analytics")).json();
+  assert.equal(analytics.kpis.orders, 0);
+  const events = await chat(stranger, "The tent arrived damaged, refund it");
+  assert.ok(events.some((e) => e.type === "text" && /don't have any refundable orders/.test(e.text)));
+  const mine = await (await api(owner, "/api/state")).json();
+  assert.equal(mine.orders[0].refunded, 0);
+});
