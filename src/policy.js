@@ -110,6 +110,7 @@ export function sanitizePolicy(input, current) {
       typeof input.requireVerifiedMerchants === "boolean" ? input.requireVerifiedMerchants : current.requireVerifiedMerchants,
     categoryLimits: limits(input.categoryLimits, current.categoryLimits || {}),
     blockHighRisk: typeof input.blockHighRisk === "boolean" ? input.blockHighRisk : current.blockHighRisk !== false,
+    autoApproveBelow: num(input.autoApproveBelow, 0, 1000, current.autoApproveBelow ?? 0),
   };
 }
 
@@ -126,6 +127,7 @@ export function applyPolicyChanges(current, changes = {}) {
   setNum("minMerchantRating", changes.min_rating);
   if (typeof changes.verified_merchants_only === "boolean") next.requireVerifiedMerchants = changes.verified_merchants_only;
   if (typeof changes.block_high_risk === "boolean") next.blockHighRisk = changes.block_high_risk;
+  setNum("autoApproveBelow", changes.auto_approve_below);
   const cats = (v) => (Array.isArray(v) ? v.filter((c) => CATEGORIES.includes(c)) : []);
   next.blockedCategories = [...new Set([...next.blockedCategories, ...cats(changes.block_categories)])].filter(
     (c) => !cats(changes.unblock_categories).includes(c),
@@ -147,6 +149,8 @@ export function diffPolicies(a, b) {
   num("perOrderLimit", "Per-order limit");
   num("maxItemPrice", "Per-item cap");
   num("minMerchantRating", "Minimum rating", (n) => `${n}★`);
+  if ((a.autoApproveBelow ?? 0) !== (b.autoApproveBelow ?? 0))
+    out.push({ label: "Checkout without asking", from: a.autoApproveBelow ? `Up to ${money(a.autoApproveBelow)}` : "Always ask", to: b.autoApproveBelow ? `Up to ${money(b.autoApproveBelow)}` : "Always ask" });
   if (a.requireVerifiedMerchants !== b.requireVerifiedMerchants)
     out.push({ label: "Verified stores only", from: a.requireVerifiedMerchants ? "On" : "Off", to: b.requireVerifiedMerchants ? "On" : "Off" });
   if ((a.blockHighRisk !== false) !== (b.blockHighRisk !== false))

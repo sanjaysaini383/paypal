@@ -10,6 +10,7 @@ import * as paypal from "./paypal.js";
 import { captureCheckout, rejectCart } from "./checkout.js";
 import { publicAuthorization, expireStale } from "./authorization.js";
 import { receiveWebhook } from "./webhooks.js";
+import { detectPurchaseIntent } from "./validate.js";
 import { CATALOG, MERCHANTS } from "./catalog.js";
 import { assessListing, merchantReputation, RISK_ENGINE_VERSION } from "./risk.js";
 
@@ -143,6 +144,8 @@ app.post("/api/chat", async (req, res) => {
     if (!res.writableEnded) res.write(JSON.stringify(event) + "\n");
   };
   remember(s, { role: "user", text: message });
+  s.purchaseIntent = detectPurchaseIntent(message); // only the user's own words count
+  if (s.purchaseIntent) audit(s, "user", "purchase_intent", "The user asked to buy in this message");
   try {
     await runAgent(s, message, emit);
   } catch (err) {
@@ -151,6 +154,7 @@ app.post("/api/chat", async (req, res) => {
   } finally {
     flush();
     s.busy = false;
+    s.purchaseIntent = false;
     emit({ type: "done" });
     res.end();
   }

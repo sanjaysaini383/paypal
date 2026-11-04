@@ -87,6 +87,7 @@ const webhook = (type, resource, headers = signed) => receiveWebhook(JSON.string
 async function checkout(sid, items = [{ sku: "OUT-TENT-2P", qty: 1 }, { sku: "OUT-LAMP", qty: 1 }]) {
   const s = getSession(sid);
   const cart = await runTool(s, "propose_cart", { items, rationale: "x" }, noop);
+  s.purchaseIntent = true; // the user asked to buy (set by /api/chat from their message)
   const co = await runTool(s, "create_paypal_checkout", { cart_id: cart.cart_id }, noop);
   assert.ok(!co.error, co.error);
   return { s, orderId: co.paypal_order_id, cart: s.carts.get(cart.cart_id) };

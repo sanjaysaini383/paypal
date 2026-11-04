@@ -8,6 +8,8 @@ import * as paypal from "./paypal.js";
 import { openCheckout } from "./checkout.js";
 import { issueRefund } from "./refunds.js";
 import { assessListing, riskSummary, sanitizeListingText } from "./risk.js";
+import { validate } from "./validate.js";
+import { isVerified } from "./catalog.js";
 
 export { CATALOG };
 const bySku = { get: getProduct, has: (sku) => !!getProduct(sku) };
@@ -221,8 +223,10 @@ export const TOOL_DEFS = [
         monthly_budget: { type: "number", description: "New total monthly budget in USD." },
         per_order_limit: { type: "number", description: "New maximum total per order in USD." },
         max_item_price: { type: "number", description: "New maximum price for a single item in USD." },
-        min_rating: { type: "number", description: "New minimum product rating, 0-5." },
+        min_rating: { type: "number", minimum: 0, maximum: 5, description: "New minimum product rating, 0-5." },
         verified_merchants_only: { type: "boolean", description: "Only buy from verified merchants." },
+        block_high_risk: { type: "boolean", description: "Block listings CartPilot's risk engine rates high risk." },
+        auto_approve_below: { type: "number", minimum: 0, description: "Carts at or below this total from verified merchants may go to PayPal checkout without an extra 'buy it' from the user (PayPal approval is still required). 0 = always ask." },
         block_categories: { type: "array", items: { type: "string", enum: CATEGORY_LIST }, description: "Categories to block entirely." },
         unblock_categories: { type: "array", items: { type: "string", enum: CATEGORY_LIST }, description: "Categories to allow again." },
         category_limits: {
@@ -385,6 +389,18 @@ export const EXECUTORS = {
   async create_paypal_checkout(session, input, emit) {
     const cart = session.carts.get(input.cart_id);
     if (!cart) return { error: "Unknown cart_id." };
+    // Server-side consent: the user's own message this turn must ask to buy,
+    // unless the cart is under their auto-approve threshold and every
+    // merchant is verified. PayPal approval is required either way.
+    const limit = session.policy.autoApproveBelow || 0;
+    const autoOk = cart.total <= limit && cart.items.every((i) => isVerified(i.merchant));
+    if (!session.purchaseIntent && !autoOk) {
+      audit(session, "guardrail", "checkout_needs_confirmation", `Agent tried to open checkout for ${cart.id} ($${cart.total.toFixed(2)}) without a purchase request from the user`, "blocked");
+      return {
+        error: "The user hasn't asked to buy in this message, so checkout was not created. Show them the cart and ask whether to check out.",
+        needs_user_confirmation: true,
+      };
+    }
     const r = await openCheckout(session, cart, emit);
     if (r.error) return r;
     return {
@@ -488,11 +504,18 @@ export function editCart(session, { add, remove }) {
   return buildCart(session, items, rationale, "user", () => {});
 }
 
+const SCHEMAS = new Map(TOOL_DEFS.map((t) => [t.name, t.input_schema]));
+
 export async function runTool(session, name, input, emit) {
   const exec = EXECUTORS[name];
   if (!exec) return { error: `Unknown tool ${name}` };
+  const checked = validate(SCHEMAS.get(name), input ?? {});
+  if (!checked.ok) {
+    audit(session, "agent", name, `Rejected invalid arguments: ${checked.errors.join("; ")}`, "error");
+    return { error: `Invalid arguments: ${checked.errors.join("; ")}. Fix them and call the tool again.` };
+  }
   try {
-    return await exec(session, input || {}, emit);
+    return await exec(session, checked.value, emit);
   } catch (err) {
     audit(session, "agent", name, err.message, "error");
     return { error: err.message };

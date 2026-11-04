@@ -35,6 +35,7 @@ test("guardrails block what the injected listing asks for", async () => {
   assert.ok(rules.includes("unverified_merchant"));
   assert.ok(rules.includes("low_rating"));
   // Blocked carts can't be checked out.
+  s.purchaseIntent = true; // the user asked to buy (set by /api/chat from their message)
   const co = await runTool(s, "create_paypal_checkout", { cart_id: [...s.carts.keys()][0] }, noop);
   assert.ok(co.error);
 });
@@ -53,6 +54,7 @@ test("checkout, capture and partial refund through simulated PayPal", async () =
   const cart = await runTool(s, "propose_cart", { items: [{ sku: "OUT-TENT-2P", qty: 1 }, { sku: "OUT-LAMP", qty: 1 }], rationale: "x" }, noop);
   assert.equal(cart.status, "proposed");
   const events = [];
+  s.purchaseIntent = true; // the user asked to buy (set by /api/chat from their message)
   const co = await runTool(s, "create_paypal_checkout", { cart_id: cart.cart_id }, (e) => events.push(e));
   assert.match(co.paypal_order_id, /^SIM-ORDER-/);
   assert.equal(events.at(-1).type, "checkout");
@@ -81,6 +83,7 @@ test("refunding every item one by one also refunds shipping", async () => {
   // Under $75, so the order carries a shipping fee.
   const cart = await runTool(s, "propose_cart", { items: [{ sku: "HOM-MUG", qty: 1 }, { sku: "GRO-TEA", qty: 1 }], rationale: "x" }, noop);
   assert.equal(cart.shipping, 6.99);
+  s.purchaseIntent = true; // the user asked to buy (set by /api/chat from their message)
   const co = await runTool(s, "create_paypal_checkout", { cart_id: cart.cart_id }, noop);
   paypal.simulateBuyerApproval(co.paypal_order_id); // the buyer approves in PayPal
   const cap = await paypal.captureOrder(co.paypal_order_id);

@@ -18,6 +18,7 @@ async function checkout(sid, items = [{ sku: "OUT-TENT-2P", qty: 1 }, { sku: "OU
   const s = getSession(sid);
   const cart = await runTool(s, "propose_cart", { items, rationale: "test" }, noop);
   assert.equal(cart.status, "proposed");
+  s.purchaseIntent = true; // the user asked to buy (set by /api/chat from their message)
   const co = await runTool(s, "create_paypal_checkout", { cart_id: cart.cart_id }, noop);
   assert.ok(!co.error, co.error);
   const c = s.carts.get(cart.cart_id);
@@ -167,6 +168,7 @@ test("a cart whose prices drifted from the catalog is never authorized", async (
   const s = getSession("auth_stale");
   const cart = await runTool(s, "propose_cart", { items: [{ sku: "OUT-LAMP", qty: 1 }], rationale: "x" }, noop);
   s.carts.get(cart.cart_id).items[0] = { ...s.carts.get(cart.cart_id).items[0], price: 0.5 };
+  s.purchaseIntent = true; // the user asked to buy (set by /api/chat from their message)
   const co = await runTool(s, "create_paypal_checkout", { cart_id: cart.cart_id }, noop);
   assert.match(co.error, /price/);
   assert.equal(s.authorizations.size, 0);
@@ -175,6 +177,7 @@ test("a cart whose prices drifted from the catalog is never authorized", async (
 test("parallel checkout calls for one cart open a single PayPal order", async () => {
   const s = getSession("auth_parallel");
   const cart = await runTool(s, "propose_cart", { items: [{ sku: "OUT-LAMP", qty: 1 }], rationale: "x" }, noop);
+  s.purchaseIntent = true; // the user asked to buy (set by /api/chat from their message)
   const results = await Promise.all([1, 2, 3].map(() => runTool(s, "create_paypal_checkout", { cart_id: cart.cart_id }, noop)));
   assert.equal(results.filter((r) => r.paypal_order_id && !r.error).length, 1);
   assert.equal(s.authorizations.size, 1);
@@ -184,6 +187,7 @@ test("only one capture per session runs at a time", async () => {
   const s = getSession("auth_session_lock");
   const a = await checkout("auth_session_lock", [{ sku: "OUT-LAMP", qty: 1 }]);
   const cart2 = await runTool(s, "propose_cart", { items: [{ sku: "OUT-FUEL", qty: 1 }], rationale: "x" }, noop);
+  s.purchaseIntent = true; // the user asked to buy (set by /api/chat from their message)
   const co2 = await runTool(s, "create_paypal_checkout", { cart_id: cart2.cart_id }, noop);
   const [r1, r2] = await Promise.all([captureCheckout(s, a.orderId), captureCheckout(s, co2.paypal_order_id)]);
   assert.deepEqual([r1.status, r2.status].sort(), [200, 409]);

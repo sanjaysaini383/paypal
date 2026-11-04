@@ -16,6 +16,7 @@ const noop = () => {};
 async function paidOrder(sid, items) {
   const s = getSession(sid);
   const cart = await runTool(s, "propose_cart", { items, rationale: "x" }, noop);
+  s.purchaseIntent = true; // the user asked to buy (set by /api/chat from their message)
   const co = await runTool(s, "create_paypal_checkout", { cart_id: cart.cart_id }, noop);
   const r = await captureCheckout(s, co.paypal_order_id);
   assert.equal(r.status, 200);

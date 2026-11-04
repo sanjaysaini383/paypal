@@ -16,6 +16,7 @@ export const DEFAULT_POLICY = {
   requireVerifiedMerchants: true,
   categoryLimits: {}, // e.g. { electronics: 50 } = max $50 of items per month
   blockHighRisk: true, // listings the risk engine rates "high" can't be bought
+  autoApproveBelow: 0, // carts up to this total may skip the "buy it?" question
 };
 
 export { VERIFIED_MERCHANTS } from "./catalog.js";
@@ -33,7 +34,7 @@ const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const PERSIST = process.env.PERSIST !== "0" && !process.env.NODE_TEST_CONTEXT;
 const DATA_FILE = path.resolve(process.env.DATA_FILE || ".data/sessions.json");
 export const DATA_DIR = path.dirname(DATA_FILE);
-const TRANSIENT = new Set(["busy", "chatTimes", "captureInFlight"]);
+const TRANSIENT = new Set(["busy", "chatTimes", "captureInFlight", "purchaseIntent"]);
 
 function serialize(s) {
   const out = {};
