@@ -149,3 +149,18 @@ test("one session can't see or touch another session's money", async () => {
   const mine = await (await api(owner, "/api/state")).json();
   assert.equal(mine.orders[0].refunded, 0);
 });
+
+test("the user can preview and issue a line refund from the ledger", async () => {
+  const sid = "test_ledger_refund_owner";
+  const orderId = await checkoutOrderId(sid);
+  assert.equal((await api(sid, `/api/orders/${orderId}/capture`, { method: "POST" })).status, 200);
+  const sku = (await (await api(sid, "/api/state")).json()).orders[0].items[0].sku;
+  const preview = await (await api(sid, `/api/orders/${orderId}/refund-preview?skus=${sku}`)).json();
+  assert.ok(preview.amount > 0 && preview.lines[0].sku === sku);
+  const res = await api(sid, `/api/orders/${orderId}/refunds`, { method: "POST", body: JSON.stringify({ skus: [sku], reason: "Damaged" }) });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.refund.amount, preview.amount);
+  assert.equal((await api(sid, `/api/orders/${orderId}/refunds`, { method: "POST", body: JSON.stringify({ skus: [sku] }) })).status, 409, "no double refund");
+  assert.equal((await api("test_ledger_refund_thief", `/api/orders/${orderId}/refunds`, { method: "POST", body: "{}" })).status, 404, "other sessions can't refund it");
+});

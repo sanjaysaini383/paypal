@@ -12,6 +12,7 @@ import { publicAuthorization, expireStale, AUTH_TTL_MS } from "./authorization.j
 import { receiveWebhook } from "./webhooks.js";
 import { detectPurchaseIntent } from "./validate.js";
 import { analytics, parseFilters } from "./analytics.js";
+import { computeRefund, issueRefund } from "./refunds.js";
 import { securityHeaders, sameOrigin, writeLimiter, notFound, errorHandler } from "./http.js";
 import { CATALOG, MERCHANTS } from "./catalog.js";
 import { assessListing, merchantReputation, RISK_ENGINE_VERSION } from "./risk.js";
@@ -257,6 +258,32 @@ app.post("/api/orders/:orderId/capture", async (req, res) => {
   const s = session(req);
   const r = await captureCheckout(s, String(req.params.orderId));
   res.status(r.status).json(r.status === 200 ? { ...r.body, state: snapshot(s) } : r.body);
+});
+
+// The user's own refunds from the ledger: same server-side calculation,
+// locks and PayPal call as the agent's refund_order tool.
+const refundSkus = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string").slice(0, 20) : undefined);
+
+app.get("/api/orders/:orderId/refund-preview", (req, res) => {
+  const s = session(req);
+  const order = s.orders.find((o) => o.orderId === req.params.orderId);
+  if (!order) return res.status(404).json({ error: "Order not found." });
+  const skus = typeof req.query.skus === "string" && req.query.skus ? req.query.skus.split(",").slice(0, 20) : undefined;
+  const calc = computeRefund(order, skus);
+  res.status(calc.error ? 409 : 200).json(calc);
+});
+
+app.post("/api/orders/:orderId/refunds", async (req, res) => {
+  const s = session(req);
+  const orderId = String(req.params.orderId);
+  if (!s.orders.some((o) => o.orderId === orderId)) return res.status(404).json({ error: "Order not found." });
+  const reason = String(req.body?.reason || "Refund requested in the ledger").slice(0, 200);
+  audit(s, "user", "refund_requested", `Order ${orderId}${refundSkus(req.body?.skus)?.length ? `: ${refundSkus(req.body.skus).join(", ")}` : " (everything left)"}`);
+  const r = await issueRefund(s, { order_id: orderId, skus: refundSkus(req.body?.skus), reason });
+  if (r.error) return res.status(409).json({ error: r.error });
+  remember(s, { role: "refund", refund: r });
+  s.pendingEvents.push(`The user refunded $${r.amount.toFixed(2)} on order ${orderId} from the ledger (${r.status}).`);
+  res.json({ refund: r, state: snapshot(s) });
 });
 
 app.post("/api/reset", (req, res) => {

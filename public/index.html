@@ -139,35 +139,96 @@
       </section>
     </aside>
 
-    <!-- ------------------------------------------------------------ activity -->
-    <section class="card activity" aria-label="Activity">
+    <!-- ------------------------------------------------------------ control center -->
+    <section class="card control" aria-label="Control center" id="control-center">
       <div class="card-head">
-        <div class="tabs" role="tablist">
-          <button role="tab" class="tab active" data-tab="orders" aria-selected="true"><i data-lucide="receipt"></i>Purchases</button>
-          <button role="tab" class="tab" data-tab="insights" aria-selected="false"><i data-lucide="chart-column"></i>Insights</button>
-          <button role="tab" class="tab" data-tab="audit" aria-selected="false"><i data-lucide="list-checks"></i>Audit log <span class="count" id="audit-count">0</span></button>
+        <div class="tabs" role="tablist" id="cc-tabs">
+          <button role="tab" class="tab active" data-tab="overview" aria-selected="true"><i data-lucide="chart-column"></i>Overview</button>
+          <button role="tab" class="tab" data-tab="ledger" aria-selected="false"><i data-lucide="receipt"></i>Ledger <span class="count" id="ledger-count">0</span></button>
+          <button role="tab" class="tab" data-tab="risk" aria-selected="false"><i data-lucide="shield-alert"></i>Trust &amp; Risk <span class="count" id="risk-count">0</span></button>
+          <button role="tab" class="tab" data-tab="audit" aria-selected="false"><i data-lucide="list-checks"></i>Audit &amp; Security <span class="count" id="audit-count">0</span></button>
           <span class="tab-indicator" id="tab-indicator"></span>
         </div>
-        <span class="muted small hide-sm">Every action, rule check and payment is recorded.</span>
+        <span class="muted small hide-sm">Computed from your stored transactions and audit log.</span>
       </div>
-      <div id="orders-grid" class="grid"></div>
-      <div id="audit-grid" class="grid" hidden></div>
-      <div id="insights" class="insights" hidden>
-        <div class="stats" id="stats"></div>
-        <div class="charts">
+
+      <form class="filters" id="cc-filters" aria-label="Filters">
+        <label class="filter"><span>From</span><input type="date" name="from" /></label>
+        <label class="filter"><span>To</span><input type="date" name="to" /></label>
+        <label class="filter"><span>Merchant</span><select name="merchant"></select></label>
+        <label class="filter"><span>Category</span><select name="category"></select></label>
+        <label class="filter"><span>Status</span><select name="status"></select></label>
+        <button type="button" class="btn btn-ghost btn-sm" id="cc-reset"><i data-lucide="rotate-ccw"></i>Reset</button>
+      </form>
+
+      <div class="panel" id="panel-overview">
+        <div class="stats stats-8" id="cc-stats"></div>
+        <div class="status-chips" id="cc-status"></div>
+        <div class="charts charts-3">
+          <figure class="chart-card wide">
+            <figcaption><span><strong>Net spend over time</strong><small>Daily captures minus completed refunds</small></span>
+              <button type="button" class="btn btn-ghost btn-sm view-toggle" data-chart="time" aria-pressed="false"><i data-lucide="table-2"></i>Table</button></figcaption>
+            <div class="chart" id="chart-time"></div>
+            <div class="chart-table" id="table-time" hidden></div>
+          </figure>
           <figure class="chart-card">
-            <figcaption><span><strong>Spending by category</strong><small>This month, item prices after refunds</small></span>
-              <button type="button" class="btn btn-ghost btn-sm view-toggle" data-chart="category"><i data-lucide="table-2"></i>Table</button></figcaption>
+            <figcaption><span><strong>By category</strong><small>Item prices, net of refunds</small></span>
+              <button type="button" class="btn btn-ghost btn-sm view-toggle" data-chart="category" aria-pressed="false"><i data-lucide="table-2"></i>Table</button></figcaption>
             <div class="chart" id="chart-category"></div>
             <div class="chart-table" id="table-category" hidden></div>
           </figure>
           <figure class="chart-card">
-            <figcaption><span><strong>Spending by day</strong><small>Last 14 days, net of refunds</small></span>
-              <button type="button" class="btn btn-ghost btn-sm view-toggle" data-chart="daily"><i data-lucide="table-2"></i>Table</button></figcaption>
-            <div class="chart" id="chart-daily"></div>
-            <div class="chart-table" id="table-daily" hidden></div>
+            <figcaption><span><strong>By merchant</strong><small>Item prices, net of refunds</small></span>
+              <button type="button" class="btn btn-ghost btn-sm view-toggle" data-chart="merchant" aria-pressed="false"><i data-lucide="table-2"></i>Table</button></figcaption>
+            <div class="chart" id="chart-merchant"></div>
+            <div class="chart-table" id="table-merchant" hidden></div>
           </figure>
         </div>
+      </div>
+
+      <div class="panel" id="panel-ledger" hidden>
+        <div class="grid-toolbar">
+          <div class="seg" role="group" aria-label="Ledger view">
+            <button type="button" data-ledger-view="orders" aria-pressed="true">Orders</button>
+            <button type="button" data-ledger-view="lines" aria-pressed="false">Line items</button>
+          </div>
+          <label class="search"><i data-lucide="search"></i><input type="search" id="ledger-search" placeholder="Search order, item, merchant…" aria-label="Search the ledger" /></label>
+          <span class="spacer"></span>
+          <div class="menu-wrap">
+            <button type="button" class="btn btn-secondary btn-sm" id="ledger-columns-btn" aria-expanded="false" aria-controls="ledger-columns"><i data-lucide="columns-3"></i>Columns</button>
+            <div class="menu" id="ledger-columns" hidden></div>
+          </div>
+          <button type="button" class="btn btn-secondary btn-sm" id="ledger-export"><i data-lucide="download"></i>Export CSV</button>
+        </div>
+        <div id="ledger-grid" class="grid"></div>
+      </div>
+
+      <div class="panel" id="panel-risk" hidden>
+        <div class="stats stats-4" id="risk-summary"></div>
+        <div class="grid-toolbar">
+          <div class="seg" role="group" aria-label="Risk level">
+            <button type="button" data-risk-level="all" aria-pressed="true">All</button>
+            <button type="button" data-risk-level="high" aria-pressed="false">High</button>
+            <button type="button" data-risk-level="medium" aria-pressed="false">Medium</button>
+            <button type="button" data-risk-level="low" aria-pressed="false">Low</button>
+          </div>
+          <label class="search"><i data-lucide="search"></i><input type="search" id="risk-search" placeholder="Search listings, merchants, signals…" aria-label="Search the risk register" /></label>
+          <span class="spacer"></span>
+          <button type="button" class="btn btn-secondary btn-sm" id="risk-export"><i data-lucide="download"></i>Export CSV</button>
+        </div>
+        <div id="risk-grid" class="grid"></div>
+        <p class="panel-note" id="risk-basis"></p>
+      </div>
+
+      <div class="panel" id="panel-audit" hidden>
+        <div class="stats stats-6" id="security-strip"></div>
+        <div class="grid-toolbar">
+          <label class="search"><i data-lucide="search"></i><input type="search" id="audit-search" placeholder="Search actions, ids, details…" aria-label="Search the audit log" /></label>
+          <span class="spacer"></span>
+          <button type="button" class="btn btn-secondary btn-sm" id="audit-export"><i data-lucide="download"></i>Export CSV</button>
+        </div>
+        <div id="audit-grid" class="grid"></div>
+        <p class="panel-note">Append-only: every user message, agent tool call, guardrail decision, authorization and PayPal API call. Click a row to inspect it.</p>
       </div>
     </section>
   </main>
@@ -183,6 +244,8 @@
     </div>
     <div class="compare-body" id="compare-body"></div>
   </dialog>
+
+  <dialog class="drawer" id="detail" aria-label="Details"></dialog>
 
   <div class="toasts" id="toasts" aria-live="polite"></div>
 
