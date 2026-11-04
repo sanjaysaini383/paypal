@@ -14,6 +14,7 @@ import {
   verifyCaptureResult,
   publicAuthorization,
 } from "./authorization.js";
+import { applyDeferred } from "./webhooks.js";
 
 const fmt = (n) => `$${Number(n).toFixed(2)}`;
 
@@ -175,6 +176,7 @@ export async function captureCheckout(session, orderId) {
       pending ? "warning" : "ok",
     );
     if (alert.length) audit(session, "guardrail", "integrity_alert", alert.map((a) => a.message).join(" | "), "error");
+    applyDeferred(record.captureId); // webhooks that arrived before this response
     const label = paypal.paypalMode === "simulated" ? "simulated PayPal" : paypal.paypalMode === "live" ? "PayPal" : "PayPal sandbox";
     session.pendingEvents.push(`The user approved PayPal order ${record.orderId} (${fmt(record.total)}); capture is ${record.status}.`);
     remember(session, {

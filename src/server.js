@@ -9,11 +9,22 @@ import { editCart } from "./tools.js";
 import * as paypal from "./paypal.js";
 import { captureCheckout, rejectCart } from "./checkout.js";
 import { publicAuthorization, expireStale } from "./authorization.js";
+import { receiveWebhook } from "./webhooks.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 // Hosts like Render sit behind one proxy; trust it so req.ip is the client.
 app.set("trust proxy", 1);
+
+// PayPal webhooks need the raw body for signature verification, so this route
+// is registered before the JSON parser. No session: events are verified with
+// PayPal and matched to orders by capture id.
+app.post("/api/webhooks/paypal", express.raw({ type: () => true, limit: "256kb" }), async (req, res) => {
+  const raw = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : "";
+  const r = await receiveWebhook(raw, req.headers);
+  res.status(r.status).json(r.body);
+});
+
 app.use(express.json({ limit: "32kb" }));
 app.use(express.static(path.join(here, "..", "public")));
 

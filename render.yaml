@@ -20,6 +20,10 @@ services:
         sync: false
       - key: PAYPAL_API_BASE
         value: https://api-m.sandbox.paypal.com
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+      - key: AUTH_SIGNING_SECRET
+        generateValue: true
       - key: CHAT_LIMIT_PER_HOUR
         value: "40"
       - key: REPO_URL

@@ -63,7 +63,7 @@ export async function issueRefund(session, { order_id, skus, reason }) {
     const refund = await paypal.refundCapture(order.captureId, calc.amount, why, key);
     if (refund.status === "FAILED" || refund.status === "CANCELLED") throw new Error(`PayPal refund ${refund.refundId} ${refund.status}`);
     for (const l of lines) l.refunded = true;
-    order.refunds.push({
+    const record = {
       id: refund.refundId,
       amount: refund.amount,
       status: refund.status === "COMPLETED" ? "COMPLETED" : "PENDING",
@@ -72,7 +72,11 @@ export async function issueRefund(session, { order_id, skus, reason }) {
       calculation: calc,
       at: new Date().toISOString(),
       mode: paypal.paypalMode,
-    });
+    };
+    // The webhook may have recorded this refund first: merge, never downgrade.
+    const seen = order.refunds.find((r) => r.id === record.id);
+    if (seen) Object.assign(seen, record, { status: seen.status === "COMPLETED" ? "COMPLETED" : record.status, source: undefined });
+    else order.refunds.push(record);
     settleOrder(order);
     audit(session, "paypal", "refund", `Refund ${refund.refundId} of $${refund.amount.toFixed(2)} (${refund.status}) on order ${order.orderId}: ${why}`, refund.status === "COMPLETED" ? "ok" : "warning");
     return { refund_id: refund.refundId, status: refund.status, amount: refund.amount, order_status: order.status, calculation: calc, order_id: order.orderId };

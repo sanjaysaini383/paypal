@@ -27,6 +27,11 @@ export const VERIFIED_MERCHANTS = [
 ];
 
 const sessions = new Map();
+
+// Webhook bookkeeping shared by all sessions: event ids already processed
+// (PayPal retries deliveries) and events that arrived before the capture
+// they refer to was recorded.
+export const webhookState = { processed: new Map(), deferred: new Map() };
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------- persistence
@@ -61,6 +66,8 @@ function load() {
   try {
     const saved = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
     for (const raw of saved.sessions || []) sessions.set(raw.id, revive(raw));
+    for (const [id, at] of saved.webhooks?.processed || []) webhookState.processed.set(id, at);
+    for (const [capture, events] of saved.webhooks?.deferred || []) webhookState.deferred.set(capture, events);
     console.log(`Loaded ${sessions.size} saved session(s) from ${path.relative(process.cwd(), DATA_FILE)}`);
   } catch (err) {
     if (err.code !== "ENOENT") console.warn(`Couldn't read ${DATA_FILE}: ${err.message}`);
@@ -75,7 +82,8 @@ function saveNow() {
   try {
     fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
     const tmp = DATA_FILE + ".tmp";
-    fs.writeFileSync(tmp, JSON.stringify({ version: 1, sessions: [...sessions.values()].map(serialize) }));
+    const webhooks = { processed: [...webhookState.processed], deferred: [...webhookState.deferred] };
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, sessions: [...sessions.values()].map(serialize), webhooks }));
     fs.renameSync(tmp, DATA_FILE); // atomic: a crash never leaves a half-written file
   } catch (err) {
     console.warn(`Couldn't save sessions: ${err.message}`);
@@ -94,6 +102,15 @@ for (const sig of ["SIGINT", "SIGTERM"]) {
   });
 }
 load();
+
+// The session and order a PayPal capture belongs to (webhooks carry only PayPal ids).
+export function findOrderByCapture(captureId) {
+  for (const s of sessions.values()) {
+    const order = s.orders.find((o) => o.captureId === captureId);
+    if (order) return { session: s, order };
+  }
+  return null;
+}
 
 export function newId(prefix) {
   return `${prefix}_${crypto.randomBytes(5).toString("hex")}`;
@@ -191,5 +208,7 @@ setInterval(() => {
   const cutoff = Date.now() - SESSION_TTL_MS;
   let pruned = false;
   for (const [id, s] of sessions) if (s.touchedAt < cutoff) pruned = sessions.delete(id);
+  const weekAgo = Date.now() - SESSION_TTL_MS;
+  for (const [id, at] of webhookState.processed) if (at < weekAgo) webhookState.processed.delete(id);
   if (pruned) scheduleSave();
 }, 10 * 60 * 1000).unref();
