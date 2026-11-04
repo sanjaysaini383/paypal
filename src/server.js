@@ -11,6 +11,7 @@ import { captureCheckout, rejectCart } from "./checkout.js";
 import { publicAuthorization, expireStale } from "./authorization.js";
 import { receiveWebhook } from "./webhooks.js";
 import { detectPurchaseIntent } from "./validate.js";
+import { analytics, parseFilters } from "./analytics.js";
 import { CATALOG, MERCHANTS } from "./catalog.js";
 import { assessListing, merchantReputation, RISK_ENGINE_VERSION } from "./risk.js";
 
@@ -65,6 +66,10 @@ app.get("/api/config", (req, res) => {
 });
 
 app.get("/api/state", (req, res) => res.json(snapshot(session(req))));
+
+// Financial control center: KPIs, breakdowns, time series and the ledger,
+// computed from this session's stored orders, refunds and audit log.
+app.get("/api/analytics", (req, res) => res.json(analytics(session(req), parseFilters(req.query))));
 
 // Trust & Risk center: the risk register for every listing (scored against
 // this user's policy) plus what was flagged while this user shopped.
