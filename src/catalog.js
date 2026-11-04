@@ -14,5 +14,12 @@ const bySku = new Map(CATALOG.map((p) => [p.sku, p]));
 export const getProduct = (sku) => bySku.get(sku);
 export const hasProduct = (sku) => bySku.has(sku);
 
+// Merchant registry (demo data): verification status and year joined.
+export const MERCHANTS = Object.freeze(read("merchants.json").map((m) => Object.freeze(m)));
+const byName = new Map(MERCHANTS.map((m) => [m.name, m]));
+export const getMerchant = (name) => byName.get(name);
+export const isVerified = (name) => !!byName.get(name)?.verified;
+export const VERIFIED_MERCHANTS = MERCHANTS.filter((m) => m.verified).map((m) => m.name);
+
 // "OUT-TENT-2P" -> "OUT-TENT": products of the same kind are substitutes.
 export const kindOf = (sku) => String(sku).split("-").slice(0, 2).join("-");

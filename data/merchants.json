@@ -1,0 +1,12 @@
+[
+  {"name": "Summit Outfitters", "verified": true, "since": 2014},
+  {"name": "Ridge & River Co.", "verified": true, "since": 2017},
+  {"name": "VoltHouse Electronics", "verified": true, "since": 2012},
+  {"name": "Nest & Nook", "verified": true, "since": 2019},
+  {"name": "FreshCart Grocers", "verified": true, "since": 2016},
+  {"name": "Paper Trail Books", "verified": true, "since": 2011},
+  {"name": "GiftHub", "verified": true, "since": 2018},
+  {"name": "CampCo Direct", "verified": false, "since": 2026},
+  {"name": "DealzNow Marketplace", "verified": false, "since": 2026},
+  {"name": "BargainBlitz Outlet", "verified": false, "since": 2025}
+]

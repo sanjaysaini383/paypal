@@ -2,6 +2,8 @@
 // confused or prompt-injected agent still cannot spend outside the rules the
 // user set.
 import { VERIFIED_MERCHANTS, spentThisMonth, categorySpendThisMonth } from "./store.js";
+import { getProduct } from "./catalog.js";
+import { assessListing } from "./risk.js";
 
 export const CATEGORIES = ["outdoor", "electronics", "home", "grocery", "gift_cards", "books"];
 
@@ -35,6 +37,15 @@ export function checkCart(session, lines, totals) {
       violations.push({ rule: "low_rating", sku: l.sku, message: `${l.name} is rated ${l.rating}, below your minimum of ${p.minMerchantRating}.` });
     if (l.price > p.maxItemPrice)
       violations.push({ rule: "item_price_cap", sku: l.sku, message: `${l.name} costs $${l.price}, above your per-item cap of $${p.maxItemPrice}.` });
+    if (p.blockHighRisk !== false) {
+      const risk = assessListing(getProduct(l.sku) || l, p);
+      if (risk.level === "high")
+        violations.push({
+          rule: "high_risk_listing",
+          sku: l.sku,
+          message: `${l.name} is rated high risk (${risk.signals.filter((s) => s.weight > 0).map((s) => s.label.toLowerCase()).join(", ")}).`,
+        });
+    }
     if (l.qty > l.stock)
       violations.push({ rule: "stock", sku: l.sku, message: `Only ${l.stock} of ${l.name} in stock.` });
     if (l.qty > 10)
@@ -98,6 +109,7 @@ export function sanitizePolicy(input, current) {
     requireVerifiedMerchants:
       typeof input.requireVerifiedMerchants === "boolean" ? input.requireVerifiedMerchants : current.requireVerifiedMerchants,
     categoryLimits: limits(input.categoryLimits, current.categoryLimits || {}),
+    blockHighRisk: typeof input.blockHighRisk === "boolean" ? input.blockHighRisk : current.blockHighRisk !== false,
   };
 }
 
@@ -113,6 +125,7 @@ export function applyPolicyChanges(current, changes = {}) {
   setNum("maxItemPrice", changes.max_item_price);
   setNum("minMerchantRating", changes.min_rating);
   if (typeof changes.verified_merchants_only === "boolean") next.requireVerifiedMerchants = changes.verified_merchants_only;
+  if (typeof changes.block_high_risk === "boolean") next.blockHighRisk = changes.block_high_risk;
   const cats = (v) => (Array.isArray(v) ? v.filter((c) => CATEGORIES.includes(c)) : []);
   next.blockedCategories = [...new Set([...next.blockedCategories, ...cats(changes.block_categories)])].filter(
     (c) => !cats(changes.unblock_categories).includes(c),
@@ -136,6 +149,8 @@ export function diffPolicies(a, b) {
   num("minMerchantRating", "Minimum rating", (n) => `${n}★`);
   if (a.requireVerifiedMerchants !== b.requireVerifiedMerchants)
     out.push({ label: "Verified stores only", from: a.requireVerifiedMerchants ? "On" : "Off", to: b.requireVerifiedMerchants ? "On" : "Off" });
+  if ((a.blockHighRisk !== false) !== (b.blockHighRisk !== false))
+    out.push({ label: "Block high-risk listings", from: a.blockHighRisk !== false ? "On" : "Off", to: b.blockHighRisk !== false ? "On" : "Off" });
   for (const c of CATEGORIES) {
     const was = a.blockedCategories.includes(c);
     const is = b.blockedCategories.includes(c);

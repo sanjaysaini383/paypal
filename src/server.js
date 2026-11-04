@@ -10,6 +10,8 @@ import * as paypal from "./paypal.js";
 import { captureCheckout, rejectCart } from "./checkout.js";
 import { publicAuthorization, expireStale } from "./authorization.js";
 import { receiveWebhook } from "./webhooks.js";
+import { CATALOG, MERCHANTS } from "./catalog.js";
+import { assessListing, merchantReputation, RISK_ENGINE_VERSION } from "./risk.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -60,6 +62,17 @@ app.get("/api/config", (req, res) => {
 });
 
 app.get("/api/state", (req, res) => res.json(snapshot(session(req))));
+
+// Trust & Risk center: the risk register for every listing (scored against
+// this user's policy) plus what was flagged while this user shopped.
+app.get("/api/risk", (req, res) => {
+  const s = session(req);
+  const listings = CATALOG.map((p) => {
+    const a = assessListing(p, s.policy);
+    return { sku: p.sku, name: p.name, merchant: p.merchant, category: p.category, price: p.price, rating: p.rating, reviews: p.reviews, level: a.level, score: a.score, signals: a.signals, action: a.action, injection: a.injection.matches.map((m) => m.pattern) };
+  });
+  res.json({ engine: RISK_ENGINE_VERSION, basis: "Heuristic score from listed signals; not a fraud probability.", merchants: MERCHANTS.map((m) => merchantReputation(m.name)), listings, events: s.riskEvents });
+});
 
 // Per-session and per-IP limits so a public demo can't burn through the API
 // key (a new session id alone doesn't reset the IP limit).

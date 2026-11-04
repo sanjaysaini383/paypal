@@ -4,6 +4,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { VERIFIED_MERCHANTS } from "./catalog.js";
 
 export const DEFAULT_POLICY = {
   monthlyBudget: 500,
@@ -14,17 +15,10 @@ export const DEFAULT_POLICY = {
   blockedMerchants: [],
   requireVerifiedMerchants: true,
   categoryLimits: {}, // e.g. { electronics: 50 } = max $50 of items per month
+  blockHighRisk: true, // listings the risk engine rates "high" can't be bought
 };
 
-export const VERIFIED_MERCHANTS = [
-  "Summit Outfitters",
-  "Ridge & River Co.",
-  "VoltHouse Electronics",
-  "Nest & Nook",
-  "FreshCart Grocers",
-  "Paper Trail Books",
-  "GiftHub",
-];
+export { VERIFIED_MERCHANTS } from "./catalog.js";
 
 const sessions = new Map();
 
@@ -56,6 +50,7 @@ function revive(raw) {
     authorizations: new Map((raw.authorizations || []).map((a) => [a.snapshot.id, a])),
     policyVersion: raw.policyVersion || 1,
     policyHistory: raw.policyHistory || [],
+    riskEvents: raw.riskEvents || [],
     transcript: raw.transcript || [],
     busy: false,
   };
@@ -129,6 +124,7 @@ export function getSession(id) {
       authorizations: new Map(), // signed purchase authorizations, one per checkout
       policyVersion: 1, // bumped on every rule change; authorizations record it
       policyHistory: [],
+      riskEvents: [], // listings the risk engine flagged while this user shopped
       orders: [], // captured purchases
       audit: [],
       transcript: [], // what the chat showed, so a page reload can restore it
