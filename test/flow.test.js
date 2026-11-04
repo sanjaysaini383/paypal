@@ -57,6 +57,7 @@ test("checkout, capture and partial refund through simulated PayPal", async () =
   assert.match(co.paypal_order_id, /^SIM-ORDER-/);
   assert.equal(events.at(-1).type, "checkout");
 
+  paypal.simulateBuyerApproval(co.paypal_order_id); // the buyer approves in PayPal
   const cap = await paypal.captureOrder(co.paypal_order_id);
   assert.equal(cap.status, "COMPLETED");
   s.orders.push({
@@ -81,6 +82,7 @@ test("refunding every item one by one also refunds shipping", async () => {
   const cart = await runTool(s, "propose_cart", { items: [{ sku: "HOM-MUG", qty: 1 }, { sku: "GRO-TEA", qty: 1 }], rationale: "x" }, noop);
   assert.equal(cart.shipping, 6.99);
   const co = await runTool(s, "create_paypal_checkout", { cart_id: cart.cart_id }, noop);
+  paypal.simulateBuyerApproval(co.paypal_order_id); // the buyer approves in PayPal
   const cap = await paypal.captureOrder(co.paypal_order_id);
   s.orders.push({
     orderId: cap.orderId, captureId: cap.captureId, capturedAt: new Date().toISOString(),

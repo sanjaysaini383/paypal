@@ -1,16 +1,14 @@
 // The agent's tools. Definitions are sent to Claude; executors run here on the
 // server and are the only way the agent can touch the catalog, the wallet or
 // PayPal. Every call is validated and written to the audit log.
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { audit, newId, spentThisMonth, categorySpendThisMonth, VERIFIED_MERCHANTS } from "./store.js";
 import { checkCart, priceCart, applyPolicyChanges, TAX_RATE, CATEGORIES as CATEGORY_LIST } from "./policy.js";
+import { CATALOG, getProduct } from "./catalog.js";
 import * as paypal from "./paypal.js";
+import { openCheckout } from "./checkout.js";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-export const CATALOG = JSON.parse(fs.readFileSync(path.join(here, "..", "data", "catalog.json"), "utf8"));
-const bySku = new Map(CATALOG.map((p) => [p.sku, p]));
+export { CATALOG };
+const bySku = { get: getProduct, has: (sku) => !!getProduct(sku) };
 
 const SYNONYMS = {
   camping: ["outdoor", "tent", "camp", "backpacking"],
@@ -322,29 +320,16 @@ export const EXECUTORS = {
   async create_paypal_checkout(session, input, emit) {
     const cart = session.carts.get(input.cart_id);
     if (!cart) return { error: "Unknown cart_id." };
-    if (cart.status === "checkout") return { error: "Checkout already created for this cart.", paypal_order_id: cart.paypalOrderId };
-    if (cart.status === "paid") return { error: "This cart is already paid." };
-    if (cart.status !== "proposed" && cart.status !== "blocked")
-      return { error: `This cart was ${cart.status}. Use the user's current cart (get the latest cart_id from propose_cart).` };
-    // Re-check: the budget may have changed since the cart was proposed.
-    const violations = checkCart(session, cart.items.map((i) => ({ ...bySku.get(i.sku), qty: i.qty })), cart);
-    if (violations.length) {
-      cart.status = "blocked";
-      cart.violations = violations;
-      audit(session, "guardrail", "checkout_blocked", violations.map((v) => v.message).join(" | "), "blocked");
-      emit({ type: "cart", cart });
-      return { error: "Blocked by spending policy.", violations };
-    }
-    const order = await paypal.createOrder(cart);
-    cart.status = "checkout";
-    cart.paypalOrderId = order.id;
-    audit(session, "paypal", "order_created", `Order ${order.id} for $${cart.total.toFixed(2)} awaiting buyer approval${order.debugId ? ` (debug ${order.debugId})` : ""}`);
-    emit({ type: "checkout", cart, orderId: order.id });
+    const r = await openCheckout(session, cart, emit);
+    if (r.error) return r;
     return {
-      paypal_order_id: order.id,
-      status: order.status,
+      paypal_order_id: r.order.id,
+      status: r.order.status,
       total: cart.total,
-      next_step: "The user must approve this payment with the PayPal button shown next to the chat. Tell them it's ready.",
+      authorization_id: r.auth.snapshot.id,
+      authorization_expires_at: r.auth.snapshot.expiresAt,
+      paypal_mode: paypal.paypalMode,
+      next_step: "The user must approve this payment with the PayPal button shown next to the chat. Tell them it's ready. You cannot capture it.",
     };
   },
 

@@ -31,9 +31,10 @@ const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------- persistence
 // PERSIST=0 (and the test runner) keep everything in memory only.
-const PERSIST = process.env.PERSIST !== "0" && !process.env.NODE_TEST_CONTEXT;
+export const PERSIST = process.env.PERSIST !== "0" && !process.env.NODE_TEST_CONTEXT;
 const DATA_FILE = path.resolve(process.env.DATA_FILE || ".data/sessions.json");
-const TRANSIENT = new Set(["busy", "chatTimes"]);
+export const DATA_DIR = path.dirname(DATA_FILE);
+const TRANSIENT = new Set(["busy", "chatTimes", "captureInFlight"]);
 
 function serialize(s) {
   const out = {};
@@ -47,6 +48,9 @@ function revive(raw) {
     policy: { ...structuredClone(DEFAULT_POLICY), ...raw.policy },
     carts: new Map((raw.carts || []).map((c) => [c.id, c])),
     policyProposals: new Map((raw.policyProposals || []).map((p) => [p.id, p])),
+    authorizations: new Map((raw.authorizations || []).map((a) => [a.snapshot.id, a])),
+    policyVersion: raw.policyVersion || 1,
+    policyHistory: raw.policyHistory || [],
     transcript: raw.transcript || [],
     busy: false,
   };
@@ -105,6 +109,9 @@ export function getSession(id) {
       pendingEvents: [], // checkout/refund events the agent learns about next turn
       carts: new Map(),
       policyProposals: new Map(), // rule changes the agent suggested, awaiting the user
+      authorizations: new Map(), // signed purchase authorizations, one per checkout
+      policyVersion: 1, // bumped on every rule change; authorizations record it
+      policyHistory: [],
       orders: [], // captured purchases
       audit: [],
       transcript: [], // what the chat showed, so a page reload can restore it
@@ -116,6 +123,22 @@ export function getSession(id) {
   scheduleSave();
   return s;
 }
+
+// Every policy change goes through here so the version history stays exact.
+export function setPolicy(session, next, actor, detail) {
+  const before = JSON.stringify(session.policy);
+  session.policy = next;
+  if (JSON.stringify(next) === before) return false;
+  session.policyVersion = (session.policyVersion || 1) + 1;
+  session.policyHistory.push({ version: session.policyVersion, at: new Date().toISOString(), by: actor, detail, policy: structuredClone(next) });
+  if (session.policyHistory.length > 50) session.policyHistory.shift();
+  scheduleSave();
+  return true;
+}
+
+// Orders whose money did not (or no longer does) leave the buyer's account.
+const NOT_SPENT = new Set(["DENIED", "FAILED", "VOIDED", "REVERSED"]);
+export const countsAsSpend = (o) => !NOT_SPENT.has(o.status);
 
 // What the chat UI showed, kept short so the saved file stays small.
 export function remember(session, entry) {
@@ -142,6 +165,7 @@ export function audit(session, actor, action, detail, outcome = "ok") {
 export function spentThisMonth(session) {
   const now = new Date();
   return session.orders
+    .filter(countsAsSpend)
     .filter((o) => {
       const d = new Date(o.capturedAt);
       return d.getUTCFullYear() === now.getUTCFullYear() && d.getUTCMonth() === now.getUTCMonth();
@@ -153,7 +177,7 @@ export function spentThisMonth(session) {
 export function categorySpendThisMonth(session) {
   const now = new Date();
   const out = {};
-  for (const o of session.orders) {
+  for (const o of session.orders.filter(countsAsSpend)) {
     const d = new Date(o.capturedAt);
     if (d.getUTCFullYear() !== now.getUTCFullYear() || d.getUTCMonth() !== now.getUTCMonth()) continue;
     for (const i of o.items) if (!i.refunded) out[i.category] = Math.round(((out[i.category] || 0) + i.price * i.qty) * 100) / 100;

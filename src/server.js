@@ -2,11 +2,13 @@ import "dotenv/config";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getSession, audit, spentThisMonth, categorySpendThisMonth, remember } from "./store.js";
+import { getSession, audit, spentThisMonth, categorySpendThisMonth, remember, setPolicy } from "./store.js";
 import { sanitizePolicy, applyPolicyChanges } from "./policy.js";
 import { runAgent, aiMode, MODEL } from "./agent.js";
 import { editCart } from "./tools.js";
 import * as paypal from "./paypal.js";
+import { captureCheckout, rejectCart } from "./checkout.js";
+import { publicAuthorization, expireStale } from "./authorization.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -25,6 +27,7 @@ function session(req) {
 const round2 = (n) => Math.round(n * 100) / 100;
 
 function snapshot(s) {
+  expireStale(s);
   const spent = round2(spentThisMonth(s));
   return {
     policy: s.policy,
@@ -33,6 +36,8 @@ function snapshot(s) {
     categorySpend: categorySpendThisMonth(s),
     carts: [...s.carts.values()].slice(-10),
     proposals: [...s.policyProposals.values()].slice(-20),
+    policyVersion: s.policyVersion,
+    authorizations: [...s.authorizations.values()].slice(-20).map(publicAuthorization),
     orders: s.orders,
     audit: s.audit,
     transcript: s.transcript,
@@ -129,8 +134,8 @@ app.post("/api/chat", async (req, res) => {
 
 app.put("/api/policy", (req, res) => {
   const s = session(req);
-  s.policy = sanitizePolicy(req.body || {}, s.policy);
-  audit(s, "user", "policy_updated", `Budget $${s.policy.monthlyBudget}/mo, $${s.policy.perOrderLimit}/order, $${s.policy.maxItemPrice}/item`);
+  setPolicy(s, sanitizePolicy(req.body || {}, s.policy), "user", "Edited in the rules panel");
+  audit(s, "user", "policy_updated", `v${s.policyVersion}: budget $${s.policy.monthlyBudget}/mo, $${s.policy.perOrderLimit}/order, $${s.policy.maxItemPrice}/item`);
   s.pendingEvents.push(`The user updated their spending policy: ${JSON.stringify(s.policy)}`);
   res.json(snapshot(s));
 });
@@ -143,10 +148,10 @@ app.post("/api/policy/proposals/:id/:action", (req, res) => {
   if (proposal.status !== "pending") return res.status(409).json({ error: `Already ${proposal.status}` });
   if (req.params.action === "apply") {
     const { next, diff } = applyPolicyChanges(s.policy, proposal.changes);
-    s.policy = next;
+    setPolicy(s, next, "user", `Applied proposal ${proposal.id}: ${proposal.summary}`);
     proposal.status = "applied";
     proposal.diff = diff.length ? diff : proposal.diff;
-    audit(s, "user", "policy_updated", `Applied: ${proposal.summary}`);
+    audit(s, "user", "policy_updated", `v${s.policyVersion}: applied ${proposal.summary}`);
     s.pendingEvents.push(`The user applied the rule change "${proposal.summary}". Current policy: ${JSON.stringify(s.policy)}`);
   } else if (req.params.action === "dismiss") {
     proposal.status = "dismissed";
@@ -182,62 +187,19 @@ app.delete("/api/cart/items/:sku", (req, res) => {
 app.post("/api/carts/:id/reject", (req, res) => {
   const s = session(req);
   const cart = s.carts.get(req.params.id);
-  if (!cart || cart.status === "paid" || cart.status === "capturing") return res.status(404).json({ error: "Cart not found" });
-  cart.status = "rejected";
+  if (!cart || ["paid", "pending", "capturing", "authorizing"].includes(cart.status)) return res.status(404).json({ error: "Cart not found" });
+  rejectCart(s, cart);
   audit(s, "user", "cart_rejected", `Rejected ${cart.id} ($${cart.total.toFixed(2)})`);
   s.pendingEvents.push(`The user rejected cart ${cart.id}.`);
   res.json(snapshot(s));
 });
 
 // Called by the PayPal button's onApprove (or the simulator's approve button).
+// All verification lives in checkout.js; nothing from the request body is used.
 app.post("/api/orders/:orderId/capture", async (req, res) => {
   const s = session(req);
-  const cart = [...s.carts.values()].find((c) => c.paypalOrderId === req.params.orderId);
-  if (!cart) return res.status(404).json({ error: "This order doesn't belong to your session." });
-  if (cart.status === "paid" || cart.status === "capturing") return res.status(409).json({ error: "Already captured." });
-  if (cart.status !== "checkout") return res.status(409).json({ error: `This cart is ${cart.status}; it can't be paid.` });
-
-  // Final guardrail at the moment money moves.
-  const remaining = s.policy.monthlyBudget - spentThisMonth(s);
-  if (cart.total > remaining + 0.005) {
-    audit(s, "guardrail", "capture_blocked", `Capture of $${cart.total.toFixed(2)} exceeds remaining budget $${remaining.toFixed(2)}`, "blocked");
-    return res.status(403).json({ error: "Capture blocked: this would exceed your monthly budget." });
-  }
-
-  // Lock before the await so a double click can't record the payment twice.
-  cart.status = "capturing";
-  try {
-    const cap = await paypal.captureOrder(cart.paypalOrderId);
-    if (cap.status !== "COMPLETED") throw new Error(`Capture status ${cap.status}`);
-    cart.status = "paid";
-    const order = {
-      orderId: cap.orderId,
-      captureId: cap.captureId,
-      cartId: cart.id,
-      capturedAt: new Date().toISOString(),
-      payer: cap.payerName || cap.payerEmail || "PayPal buyer",
-      items: cart.items.map((i) => ({ ...i, refunded: false })),
-      subtotal: cart.subtotal,
-      tax: cart.tax,
-      shipping: cart.shipping,
-      total: cart.total,
-      refunded: 0,
-      refunds: [],
-      status: "COMPLETED",
-      mode: paypal.paypalMode,
-    };
-    s.orders.push(order);
-    audit(s, "paypal", "captured", `Captured ${cap.captureId} for $${cart.total.toFixed(2)} (order ${cap.orderId})${cap.debugId ? ` debug ${cap.debugId}` : ""}`);
-    s.pendingEvents.push(`The user approved and paid PayPal order ${order.orderId} ($${order.total.toFixed(2)}).`);
-    remember(s, { role: "agent", text: `Payment complete: **$${order.total.toFixed(2)}** paid with PayPal. You'll find the order in Purchases below.` });
-    res.json({ ok: true, order, state: snapshot(s) });
-  } catch (err) {
-    cart.status = "checkout"; // unlock so the buyer can retry (e.g. another card)
-    audit(s, "paypal", "capture_failed", err.message, "error");
-    const issue = err.details?.details?.[0]?.issue;
-    // INSTRUMENT_DECLINED: let the buyer pick another funding source.
-    res.status(422).json({ error: err.message, issue });
-  }
+  const r = await captureCheckout(s, String(req.params.orderId));
+  res.status(r.status).json(r.status === 200 ? { ...r.body, state: snapshot(s) } : r.body);
 });
 
 app.post("/api/reset", (req, res) => {
