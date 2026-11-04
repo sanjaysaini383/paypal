@@ -3,6 +3,8 @@
 // rule-based planner over the same tools so the app is still demoable offline.
 import Anthropic from "@anthropic-ai/sdk";
 import { TOOL_DEFS, runTool, queryTerms, searchCatalog, CATALOG } from "./tools.js";
+import { kindOf } from "./catalog.js";
+import { detectPurchaseIntent } from "./validate.js";
 import { TAX_RATE } from "./policy.js";
 import { audit } from "./store.js";
 import { PRESETS, openAIConfig, runOpenAICompatible } from "./llm-openai.js";
@@ -29,7 +31,8 @@ const MAX_STEPS = 14;
 const SYSTEM = `You are CartPilot, a shopping agent that spends a user's money through PayPal on their behalf.
 
 How you work:
-- Understand the request, then search the catalog: one focused search per item type (e.g. "tent", "sleeping bag", "stove"), several in the same turn if you can. Don't pass max_price unless the user set a per-item price; the budget applies to the whole cart. Don't repeat a search with tighter filters.
+- For anything with several items (a kit, a setup, "everything I need for…"), break the request into a structured plan and call plan_purchase: one slot per item type with quantities (per person where it matters), mark nice-to-haves as optional, link dependent items with "requires", and pass the budget the user named. It returns an optimized, guardrail-checked cart; then summarize what was chosen, what was skipped and the main trade-off.
+- For single items or comparisons, search the catalog: one focused search per item type (e.g. "tent", "sleeping bag", "stove"), several in the same turn if you can. Don't pass max_price unless the user set a per-item price; the budget applies to the whole cart. Don't repeat a search with tighter filters.
 - Check the wallet status before building a cart so you know the budget, limits and blocked categories.
 - Pick items that genuinely fit: compare price, rating and reviews; prefer verified merchants; don't pad the cart. Keep items that depend on each other together (e.g. fuel only with a stove).
 - Plan the whole cart, then call propose_cart. Aim to finish within about six tool calls.
@@ -153,6 +156,10 @@ export function summarize(name, r) {
       return `PayPal order ${r.paypal_order_id} awaiting your approval`;
     case "refund_order":
       return `Refunded $${r.amount.toFixed(2)} (${r.order_status})`;
+    case "plan_purchase":
+      return r.feasible
+        ? `Planned ${r.items.length} item${r.items.length === 1 ? "" : "s"} · $${r.totals.total.toFixed(2)} of $${r.budget.effective.toFixed(2)}${r.skipped.length ? ` · ${r.skipped.length} optional skipped` : ""}`
+        : `No plan fits: ${r.reason}`;
     case "show_products":
       return `Showing ${r.shown} option${r.shown === 1 ? "" : "s"}`;
     case "propose_policy_change":
@@ -164,17 +171,55 @@ export function summarize(name, r) {
 
 // ---------------------------------------------------------------- offline
 // Deterministic fallback used when no API key is configured. It drives the
-// exact same tools as Claude, so guardrails, PayPal and the audit log behave
-// identically; only the planning is rule-based.
+// exact same tools as the AI models, so guardrails, the optimizer, PayPal
+// and the audit log behave identically; only the request parsing is
+// rule-based.
+const kindSkus = (kind) => CATALOG.filter((p) => kindOf(p.sku) === kind).map((p) => p.sku);
+const slot = (label, kind, extra = {}) => ({ label, skus: kindSkus(kind), ...extra });
 const KITS = [
-  { match: /\b(camp\w*|hik\w*|backpack\w*|outdoor|trail)\b/, label: "camping kit", kinds: ["OUT-TENT", "OUT-BAG", "OUT-PAD", "OUT-STOVE", "OUT-FUEL", "OUT-LAMP", "OUT-FILTER", "OUT-COOK"] },
-  { match: /\b(wfh|desk|office setup|work[- ]from[- ]home|home office)\b/, label: "desk setup", kinds: ["ELC-KEYBOARD", "ELC-MOUSE", "HOM-DESK", "ELC-WEBCAM", "HOM-PLANT", "HOM-CHAIR"] },
-  { match: /\b(coffee|snack\w*|pantry|groceries)\b/, label: "pantry run", kinds: ["GRO-COFFEE", "GRO-TRAILMIX", "GRO-TEA", "HOM-MUG"] },
+  {
+    match: /\b(camp\w*|hik\w*|backpack\w*|outdoor|trail)\b/,
+    label: "camping setup",
+    slots: (people) => [
+      slot("Tent", "OUT-TENT"),
+      slot("Sleeping bags", "OUT-BAG", { qty: people }),
+      slot("Sleeping pads", "OUT-PAD", { qty: people }),
+      slot("Stove", "OUT-STOVE", { required: false }),
+      slot("Fuel", "OUT-FUEL", { required: false, requires: "Stove" }),
+      slot("Headlamps", "OUT-LAMP", { required: false, qty: people }),
+      slot("Water filter", "OUT-FILTER", { required: false }),
+      slot("Cook set", "OUT-COOK", { required: false }),
+    ],
+  },
+  {
+    match: /\b(wfh|desk|office setup|work[- ]from[- ]home|home office)\b/,
+    label: "desk setup",
+    slots: () => [
+      slot("Keyboard", "ELC-KEYBOARD"),
+      slot("Mouse", "ELC-MOUSE"),
+      slot("Desk lamp", "HOM-DESK", { required: false }),
+      slot("Webcam", "ELC-WEBCAM", { required: false }),
+      slot("Plant", "HOM-PLANT", { required: false }),
+      slot("Chair", "HOM-CHAIR", { required: false }),
+    ],
+  },
+  {
+    match: /\b(coffee|snack\w*|pantry|groceries)\b/,
+    label: "pantry run",
+    slots: () => [slot("Coffee", "GRO-COFFEE"), slot("Snacks", "GRO-TRAILMIX"), slot("Tea", "GRO-TEA", { required: false }), slot("Mug", "HOM-MUG", { required: false })],
+  },
 ];
-const kindOf = (sku) => sku.split("-").slice(0, 2).join("-");
+const WORD_NUMBERS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, couple: 2 };
+function peopleIn(text) {
+  const m = /\bfor (?:a )?(\d+|one|two|three|four|five|six|couple)\b(?:\s*(?:people|persons|adults|of us|campers))?/.exec(text);
+  const n = m ? Number(m[1]) || WORD_NUMBERS[m[1]] : 1;
+  return Math.min(6, Math.max(1, n || 1));
+}
 
 // Plain-English rule parsing for the offline agent ("cap electronics at $50",
-// "never spend more than $40 a month on books", "block gift cards").
+// "never spend more than $40 a month on books", "block gift cards",
+// "don't buy anything rated below 4 stars", "allow purchases under $30
+// without confirmation").
 const CATEGORY_WORDS = {
   outdoor: /\b(outdoor|camping|hiking)\b/,
   electronics: /\b(electronics?|gadgets?|tech)\b/,
@@ -186,9 +231,21 @@ const CATEGORY_WORDS = {
 const categoryIn = (s) => Object.entries(CATEGORY_WORDS).find(([, re]) => re.test(s))?.[0];
 
 export function parseRule(text) {
+  const changes = {};
+  // Rules phrased around buying ("do not purchase products rated below 4
+  // stars") are still rules; recognise them before the "is this a purchase?" check.
+  const rating = /\b(?:rated|rating|ratings?)\s+(?:below|under|less than|lower than)\s+(\d(?:\.\d)?)/.exec(text);
+  if (rating) changes.min_rating = Number(rating[1]);
+  const auto = /\b(?:below|under|less than|up to)\s+\$?\s?(\d+(?:\.\d+)?)\b[^.]*\bwithout\s+(?:additional\s+|extra\s+|further\s+)?(?:confirmation|confirming|asking|approval)/.exec(text);
+  if (auto) {
+    changes.auto_approve_below = Number(auto[1]);
+    if (/\bverified\b/.test(text)) changes.verified_merchants_only = true;
+  }
+  if (/\b(block|avoid|never buy|no)\b[^.]*\bhigh[- ]risk\b/.test(text)) changes.block_high_risk = true;
+  if (Object.keys(changes).length) return changes;
+
   if (!/\b(never|cap|limit|max(imum)?|no more than|at most|block|unblock|allow|budget|rule|per[- ]order|per[- ]item)\b/.test(text)) return null;
   if (/\b(buy|order it|purchase|get me|find)\b/.test(text) && !/\brule\b/.test(text)) return null;
-  const changes = {};
   const capPatterns = [
     /(?:never spend more than|no more than|at most|max(?:imum)?(?: of)?|cap(?:ped)?|limit(?:ed)?)\D{0,12}?\$?\s?(\d+(?:\.\d+)?)[^.]*?\b(?:on|for)\s+([a-z ]+)/g,
     /(?:cap|limit)\s+([a-z ]+?)\s+(?:at|to)\s+\$?\s?(\d+(?:\.\d+)?)/g,
@@ -213,11 +270,7 @@ export function parseRule(text) {
   return Object.keys(changes).length ? changes : null;
 }
 
-// Best value within a kind: cheapest well-rated option, else the best rated.
-function bestValue(products) {
-  const good = products.filter((p) => p.rating >= 4.3).sort((a, b) => a.price - b.price);
-  return good[0] || [...products].sort((a, b) => b.rating - a.rating)[0];
-}
+const money = (n) => `$${Number(n).toFixed(2)}`;
 
 async function runOffline(session, userText, emit) {
   const say = (text) => emit({ type: "text", text });
@@ -230,23 +283,24 @@ async function runOffline(session, userText, emit) {
   };
   session.pendingEvents.length = 0;
   const lower = userText.toLowerCase();
+  const wantsToBuy = detectPurchaseIntent(userText);
 
   if (!session.offlineNoticeShown) {
     session.offlineNoticeShown = true;
-    say("(Offline demo agent: set GEMINI_API_KEY (free) or ANTHROPIC_API_KEY to use a real AI model. Guardrails and PayPal work the same either way.)");
+    say("(Offline demo agent: set GEMINI_API_KEY (free) or ANTHROPIC_API_KEY to use a real AI model. Guardrails, the optimizer and PayPal work the same either way.)");
   }
 
   const wallet = await call("get_wallet_status", {});
 
-  if (/\b(refund|return|cancel|broken|damaged)\b/.test(lower)) {
-    const order = [...wallet.orders].reverse().find((o) => o.status !== "REFUNDED");
+  if (/\b(refund|return|cancel|broken|damaged|defective|punctured)\b/.test(lower)) {
+    const order = [...wallet.orders].reverse().find((o) => o.status !== "REFUNDED" && o.status !== "PENDING");
     if (!order) return say("You don't have any refundable orders yet.");
     const mentioned = new Set(queryTerms(lower));
     // Score items by how many of their name words the user mentioned; keep only the best match(es),
     // so "sleeping pad" refunds the pad and not the sleeping bag too.
     const scored = order.items
       .filter((i) => !i.refunded)
-      .map((i) => ({ sku: i.sku, hits: queryTerms(i.name).filter((w) => mentioned.has(w) || mentioned.has(w + "s")).length }));
+      .map((i) => ({ sku: i.sku, hits: queryTerms(i.name).filter((w) => mentioned.has(w) || mentioned.has(w + "s") || mentioned.has(w.replace(/s$/, ""))).length }));
     const bestHits = Math.max(0, ...scored.map((x) => x.hits));
     const skus = bestHits ? scored.filter((x) => x.hits === bestHits).map((x) => x.sku) : [];
     const wholeOrder = /\b(whole|entire|everything|all of it|full refund|cancel)\b/.test(lower);
@@ -254,25 +308,64 @@ async function runOffline(session, userText, emit) {
       const names = order.items.filter((i) => !i.refunded).map((i) => i.name).join(", ");
       return say(`I couldn't match that to an item in your last order (${names}). Which item should I refund, or should I refund the whole order?`);
     }
-    const r = await call("refund_order", { order_id: order.order_id, skus: skus.length ? skus : undefined, reason: "Customer return" });
-    return say(r.error ? `Refund failed: ${r.error}` : `Done: refunded $${r.amount.toFixed(2)} to your PayPal account.`);
+    const reason = /\bdamaged|broken|punctured|defective\b/.test(lower) ? "Item arrived damaged" : "Customer return";
+    const r = await call("refund_order", { order_id: order.order_id, skus: skus.length ? skus : undefined, reason });
+    if (r.error) return say(`Refund failed: ${r.error}`);
+    const c = r.calculation;
+    return say(
+      `${c.lines.map((l) => `- ${l.name}${l.qty > 1 ? ` ×${l.qty}` : ""}: ${money(l.goods)} + ${money(l.tax)} tax`).join("\n")}${c.shipping ? `\n- Shipping: ${money(c.shipping)}` : ""}\n` +
+        `Refund of **${money(r.amount)}** sent through PayPal (${r.status === "COMPLETED" ? "completed" : "pending at PayPal; I'll update the ledger when it settles"}). The order is now ${r.order_status.replace(/_/g, " ").toLowerCase()}.`,
+    );
   }
 
   const ruleChanges = parseRule(lower);
   if (ruleChanges) {
     const r = await call("propose_policy_change", { ...ruleChanges, summary: userText.trim().slice(0, 200) });
-    return say(r.error || "I've prepared that rule change. Review it below and click Apply to turn it on.");
+    return say(r.error || "I've prepared that rule change. Review the before/after and its effects below, then click Apply to turn it on.");
   }
 
   const proposed = [...session.carts.values()].reverse().find((c) => c.status === "proposed");
-  if (proposed && /^(yes|yep|ok|okay|sure|buy it|buy|check ?out|go ahead|do it|looks good)\b/.test(lower.trim())) {
+  if (proposed && wantsToBuy && /^(yes|yep|yeah|ok|okay|sure|buy it|buy|check ?out|go ahead|do it|looks good|sounds good|confirm|please check out)\b/.test(lower.trim())) {
     const co = await call("create_paypal_checkout", { cart_id: proposed.id });
     if (co.error) return say(`Checkout blocked: ${co.error}`);
-    return say(`Checkout is ready: $${proposed.total.toFixed(2)}. Approve it with the PayPal button.`);
+    return say(`Checkout is ready: ${money(proposed.total)}, protected by authorization ${co.authorization_id}. Approve it with the PayPal button.`);
   }
 
+  // Too vague to act on: ask instead of guessing.
+  const kit = KITS.find((k) => k.match.test(lower));
+  if (!kit && !queryTerms(lower).length)
+    return say("Happy to help. What should I look for, and is there a budget? For example: \"a 2-person tent under $150\" or \"a camping setup for two within $300\".");
+
   const budgetMatch = lower.match(/\$\s?(\d+(?:\.\d+)?)/) || lower.match(/(\d+(?:\.\d+)?)\s?(?:dollars|usd|bucks)/);
-  const budget = Math.min(budgetMatch ? Number(budgetMatch[1]) : Infinity, wallet.remaining_budget, wallet.policy.perOrderLimit);
+  const named = budgetMatch ? Number(budgetMatch[1]) : undefined;
+
+  if (kit && !/\bcheap(est)?\b|lowest price/.test(lower)) {
+    const people = peopleIn(lower);
+    const plan = await call("plan_purchase", {
+      slots: kit.slots(people),
+      ...(named ? { budget: named } : {}),
+      prefer: /\b(best|premium|quality)\b/.test(lower) ? "quality" : "balanced",
+      rationale: `A ${kit.label}${people > 1 ? ` for ${people}` : ""}: every essential covered, optional extras added only where they fit${named ? ` the ${money(named)} budget` : " your limits"}.`,
+    });
+    if (!plan.feasible) return say(`I can't build that within your limits. ${plan.reason}\n${(plan.suggestions || []).map((s) => `- ${s}`).join("\n")}`);
+    const flaggedHigh = plan.excluded.filter((e) => /high risk/.test(e.reason));
+    const lines = plan.items.map((i) => `- ${i.slot}: ${i.name}${i.qty > 1 ? ` ×${i.qty}` : ""} (${money(i.unit_price * i.qty)}). ${i.why}`).join("\n");
+    const notes = [
+      plan.skipped.length ? `Left out to stay within budget: ${plan.skipped.map((s) => s.slot.toLowerCase()).join(", ")}.` : "",
+      plan.tradeoffs[0] ? `Trade-off: ${plan.tradeoffs[0]}` : "",
+      flaggedHigh.length ? `Excluded as high risk: ${flaggedHigh.map((e) => e.sku).join(", ")}.` : "",
+    ].filter(Boolean);
+    const summary = `${lines}\nTotal **${money(plan.totals.total)}** with tax and shipping (${money(plan.headroom)} under ${plan.budget.binding}).${notes.length ? `\n${notes.join("\n")}` : ""}`;
+    if (plan.cart_status !== "proposed") return say(`${summary}\nThe guardrails blocked this cart; see the cart for details.`);
+    if (wantsToBuy) {
+      const co = await call("create_paypal_checkout", { cart_id: plan.cart_id });
+      if (co.error) return say(`${summary}\nCheckout blocked: ${co.error}`);
+      return say(`${summary}\nI've locked these exact items and prices in authorization ${co.authorization_id}. Approve the payment with the PayPal button.`);
+    }
+    return say(`${summary}\nSay "buy it" and I'll set up PayPal checkout.`);
+  }
+
+  const budget = Math.min(named ?? Infinity, wallet.remaining_budget, wallet.policy.perOrderLimit);
   await call("search_catalog", { query: userText });
   const full = searchCatalog({ query: userText }); // full rows (with relevance) for planning
   const flagged = full.filter((p) => p.risk.level === "high");
@@ -283,56 +376,42 @@ async function runOffline(session, userText, emit) {
         .join("; ")}.${flagged.some((f) => f.risk.injection.detected) ? " One listing hides instructions aimed at AI agents; I treated it as data and never followed it." : ""}`,
     );
   // Policy is deliberately not pre-filtered here: the server-side guardrails decide.
-  const pool = full.filter((p) => !p.risk_flags.length);
+  const pool = full.filter((p) => p.risk.level !== "high");
   const withTax = (p) => p.price * (p.category === "gift_cards" ? 1 : 1 + TAX_RATE);
-  const picks = [];
+  let best;
   let rationale;
-  const kit = KITS.find((k) => k.match.test(lower));
-
-  if (/\bcheap(est)?\b|lowest price/.test(lower) && pool.length) {
+  if (pool.length) {
     const top = Math.max(...pool.map((p) => p.relevance));
-    const best = pool.filter((p) => p.relevance === top).sort((a, b) => a.price - b.price)[0];
-    picks.push(best);
-    rationale = `Cheapest well-matched option from a verified seller: ${best.name} at $${best.price}.`;
-  } else if (kit) {
-    // Themed kit: best-value item of each kind, in priority order, within budget.
-    let running = 0;
-    for (const kind of kit.kinds) {
-      const options = CATALOG.filter((p) => kindOf(p.sku) === kind && !flagged.some((f) => f.sku === p.sku));
-      const p = options.length && bestValue(options);
-      if (p && running + withTax(p) <= budget) {
-        picks.push(p);
-        running += withTax(p);
-      }
+    const matches = pool.filter((p) => p.relevance === top);
+    if (/\bcheap(est)?\b|lowest price/.test(lower)) {
+      // Cheapest that the rules allow: prefer verified, well-rated listings.
+      best = [...matches].sort((a, b) => b.merchant_verified - a.merchant_verified || a.price - b.price)[0];
+      rationale = `Cheapest well-matched option${best.merchant_verified ? " from a verified seller" : ""}: ${best.name} at ${money(best.price)}.`;
+    } else {
+      best = [...matches].sort((a, b) => Math.abs(withTax(a) - (Number.isFinite(budget) ? budget : 0)) - Math.abs(withTax(b) - (Number.isFinite(budget) ? budget : 0)) || b.rating - a.rating)[0];
+      rationale = `Closest match to your request: ${best.name}.`;
     }
-    rationale = `A ${kit.label}: the best-value, well-rated pick for each essential, kept within ${Number.isFinite(budget) ? `$${budget.toFixed(0)}` : "your budget"}.`;
-  } else if (pool.length) {
-    const top = Math.max(...pool.map((p) => p.relevance));
-    const best = pool.filter((p) => p.relevance === top).sort((a, b) => Math.abs(withTax(a) - (budget || 0)) - Math.abs(withTax(b) - (budget || 0)) || b.rating - a.rating)[0];
-    picks.push(best);
-    rationale = `Closest match to your request: ${best.name}.`;
   }
-  if (!picks.length) return say("I couldn't find anything matching that within your budget. Try different keywords.");
+  if (!best) return say("I couldn't find anything matching that. Could you describe it differently, or tell me what it's for?");
 
-  // Show the picks (plus close alternatives for single-item requests) as cards.
-  const alternatives = picks.length === 1 ? pool.filter((p) => p.sku !== picks[0].sku && p.category === picks[0].category).slice(0, 2) : [];
+  const alternatives = pool.filter((p) => p.sku !== best.sku && p.category === best.category).slice(0, 2);
   await call("show_products", {
-    title: picks.length > 1 ? "My picks" : "Best match and alternatives",
-    products: [...picks, ...alternatives].map((p, i) => ({
+    title: "Best match and alternatives",
+    products: [best, ...alternatives].map((p, i) => ({
       sku: p.sku,
-      note: i < picks.length ? `★ ${p.rating} from ${p.reviews.toLocaleString("en-US")} reviews, best value in its kind` : "Alternative option",
+      note: i === 0 ? `★ ${p.rating} from ${p.reviews.toLocaleString("en-US")} reviews, best fit for your request` : `Alternative: ${p.risk.level === "medium" ? "medium risk, see why on the card" : `★ ${p.rating}`}`,
     })),
   });
 
-  const cart = await call("propose_cart", { items: picks.map((p) => ({ sku: p.sku, qty: 1 })), rationale });
+  const cart = await call("propose_cart", { items: [{ sku: best.sku, qty: 1 }], rationale });
   if (cart.error) return say(cart.error);
   if (cart.violations?.length)
     return say(`I can't buy that: ${cart.violations.map((v) => v.message).join(" ")} Adjust your spending policy if you really want it.`);
-  const lines = cart.items.map((i) => `- ${i.name}: $${i.price.toFixed(2)}`).join("\n");
-  if (/\b(buy|order|checkout|check out|purchase|get me)\b/.test(lower) && !/\bsuggest|ideas?\b/.test(lower)) {
+  const lines = cart.items.map((i) => `- ${i.name}: ${money(i.price)}`).join("\n");
+  if (wantsToBuy) {
     const co = await call("create_paypal_checkout", { cart_id: cart.cart_id });
     if (co.error) return say(`Checkout blocked: ${co.error}`);
-    return say(`${lines}\nTotal $${cart.total.toFixed(2)} with tax and shipping. Approve the payment with the PayPal button to complete it.`);
+    return say(`${lines}\nTotal ${money(cart.total)} with tax and shipping, locked in authorization ${co.authorization_id}. Approve the payment with the PayPal button to complete it.`);
   }
-  say(`${lines}\nTotal $${cart.total.toFixed(2)}. Say "buy it" and I'll set up PayPal checkout.`);
+  say(`${lines}\nTotal ${money(cart.total)}. Say "buy it" and I'll set up PayPal checkout.`);
 }

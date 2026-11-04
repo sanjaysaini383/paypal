@@ -9,68 +9,19 @@ import { openCheckout } from "./checkout.js";
 import { issueRefund } from "./refunds.js";
 import { assessListing, riskSummary, sanitizeListingText } from "./risk.js";
 import { validate } from "./validate.js";
+import { searchCatalog, queryTerms } from "./search.js";
+import { optimizeCart } from "./optimizer.js";
+
+export { searchCatalog, queryTerms };
 import { isVerified } from "./catalog.js";
 
 export { CATALOG };
 const bySku = { get: getProduct, has: (sku) => !!getProduct(sku) };
 
-const SYNONYMS = {
-  camping: ["outdoor", "tent", "camp", "backpacking"],
-  hiking: ["outdoor", "trail", "backpack", "hiking"],
-  trip: ["outdoor"],
-  office: ["desk", "chair", "keyboard", "mouse", "monitor", "webcam", "lamp"],
-  wfh: ["desk", "chair", "keyboard", "mouse", "monitor", "webcam", "lamp"],
-  work: ["keyboard", "mouse", "monitor", "webcam", "chair", "desk"],
-  desk: ["keyboard", "mouse", "monitor", "webcam", "lamp", "chair"],
-  snacks: ["trail mix", "grocery"],
-  music: ["earbuds", "headphones"],
-  earphones: ["earbuds", "headphones"],
-  headset: ["headphones", "earbuds"],
-  speakers: ["earbuds", "headphones"],
-  audio: ["earbuds", "headphones"],
-  kitchen: ["mug", "oil", "cook", "coffee"],
-  gift: ["gift", "book", "mug", "plant"],
-  food: ["grocery", "meals", "trail mix", "coffee", "tea"],
-};
-
 // Text in product listings is untrusted. The risk engine flags anything that
 // reads like an instruction aimed at an AI agent; such text never reaches the
 // model, and the rest is passed as clearly labelled seller text.
 const isInjected = (p) => assessListing(p).injection.detected;
-
-const STOPWORDS = new Set(
-  "the and for with under over about please find buy get need want some keep plan cheap cheapest best good new one two people person persons weekend week month budget dollars usd me my our you your can could would should it its this that them they from into out also just around".split(" "),
-);
-
-export function queryTerms(query) {
-  return String(query).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !STOPWORDS.has(w) && !/^\d+$/.test(w));
-}
-
-export function searchCatalog({ query = "", category, max_price }) {
-  const words = queryTerms(query);
-  const terms = new Set(words);
-  for (const w of words) for (const s of SYNONYMS[w] || []) terms.add(s);
-  const scored = CATALOG.filter((p) => (!category || p.category === category) && (!max_price || p.price <= max_price))
-    .map((p) => {
-      const hay = `${p.name} ${p.description} ${p.category} ${p.merchant}`.toLowerCase();
-      let score = 0;
-      for (const t of terms) if (hay.includes(t)) score += p.name.toLowerCase().includes(t) ? 3 : 1;
-      return { p, score };
-    })
-    .filter((x) => x.score > 0 || terms.size === 0)
-    .sort((a, b) => b.score - a.score || b.p.rating - a.p.rating)
-    .slice(0, 10);
-  return scored.map(({ p, score }) => {
-    const risk = assessListing(p);
-    return {
-      ...p,
-      relevance: score,
-      merchant_verified: VERIFIED_MERCHANTS.includes(p.merchant),
-      risk_flags: risk.injection.detected ? ["possible_prompt_injection_in_listing"] : [],
-      risk,
-    };
-  });
-}
 
 // Remember each flagged listing once per session (latest assessment wins),
 // for the Trust & Risk center and the audit log.
@@ -118,6 +69,39 @@ export const TOOL_DEFS = [
         max_price: { type: "number", description: "Optional maximum unit price in USD." },
       },
       required: ["query"],
+    },
+  },
+  {
+    name: "plan_purchase",
+    description:
+      "Turn a multi-item request into an optimized, policy-checked cart. Give one slot per thing the user needs (e.g. tent; sleeping bags qty 2; optional stove; fuel that requires the stove) and the budget they named. The server searches every merchant, drops items that break the user's rules or are high risk, and finds the best combination whose total INCLUDING tax and shipping fits the tightest of: that budget, the per-order limit and what's left this month. Required slots must be filled; optional ones are added when they fit. Returns the cart (cart_id, already through the guardrails), why each item was chosen, alternatives, trade-offs and exclusions. Prefer this over propose_cart for 3+ items.",
+    input_schema: {
+      type: "object",
+      properties: {
+        slots: {
+          type: "array",
+          minItems: 1,
+          maxItems: 10,
+          items: {
+            type: "object",
+            properties: {
+              label: { type: "string", maxLength: 40, description: "Short name shown to the user, e.g. 'Sleeping bags'." },
+              query: { type: "string", maxLength: 80, description: "Search keywords for this slot, e.g. 'sleeping bag'. Defaults to the label." },
+              category: { type: "string", enum: CATEGORY_LIST },
+              qty: { type: "integer", minimum: 1, maximum: 10, description: "Units needed, e.g. 2 sleeping bags for two people." },
+              required: { type: "boolean", description: "false for nice-to-haves that are added only if they fit." },
+              requires: { type: "string", description: "Label of another slot this one is only useful with (fuel requires stove)." },
+              max_unit_price: { type: "number", minimum: 0, description: "Only if the user set a price for this item." },
+              skus: { type: "array", maxItems: 8, items: { type: "string" }, description: "Optional explicit candidate SKUs from search results." },
+            },
+            required: ["label"],
+          },
+        },
+        budget: { type: "number", minimum: 0, description: "Total the user wants to spend on this purchase, including tax and shipping. Omit if they gave none." },
+        prefer: { type: "string", enum: ["balanced", "quality", "price"], description: "balanced (default): cover the list, then quality. quality: fewer, better items. price: cheapest complete set." },
+        rationale: { type: "string", maxLength: 300, description: "One or two sentences for the user." },
+      },
+      required: ["slots"],
     },
   },
   {
@@ -380,6 +364,40 @@ export const EXECUTORS = {
     audit(session, "agent", "show_products", `${title}: ${items.map((i) => i.sku).join(", ")}`);
     emit({ type: "products", title, items });
     return { shown: items.length, note: "The user sees these as cards with Add to cart and Compare buttons. Keep your reply short; don't repeat every detail." };
+  },
+
+  async plan_purchase(session, input, emit) {
+    const seen = new Set();
+    const slots = input.slots.filter((s) => !seen.has(s.label) && seen.add(s.label));
+    const plan = optimizeCart(session, { slots, budget: input.budget, prefer: input.prefer });
+    for (const e of plan.excluded) recordRisk(session, assessListing(bySku.get(e.sku), session.policy));
+    audit(
+      session,
+      "agent",
+      "plan_purchase",
+      `${slots.length} slot(s), limit $${plan.budget.effective.toFixed(2)} (${plan.budget.binding}) → ${plan.feasible ? `${plan.items.length} item(s), $${plan.totals.total.toFixed(2)}` : `no feasible plan: ${plan.reason}`}`,
+      plan.feasible ? "ok" : "warning",
+    );
+    if (plan.feasible) {
+      const rationale = input.rationale || `Optimized for ${plan.prefer}: every essential covered for $${plan.totals.total.toFixed(2)}, within ${plan.budget.binding}.`;
+      const cart = buildCart(session, plan.items.map((i) => ({ sku: i.sku, qty: i.qty })), rationale, "agent", emit);
+      Object.assign(plan, { cart_id: cart.cart_id, cart_status: cart.status, cart_violations: cart.violations });
+    }
+    emit({ type: "plan", plan });
+    if (!plan.feasible) return { feasible: false, reason: plan.reason, suggestions: plan.suggestions, budget: plan.budget, excluded: plan.excluded.slice(0, 6).map((e) => ({ sku: e.sku, reason: e.reasons[0] })) };
+    return {
+      feasible: true,
+      cart_id: plan.cart_id,
+      cart_status: plan.cart_status,
+      totals: plan.totals,
+      budget: plan.budget,
+      headroom: plan.headroom,
+      items: plan.items.map(({ slot, sku, name, qty, unit_price, rating, why }) => ({ slot, sku, name, qty, unit_price, rating, why })),
+      skipped: plan.skipped,
+      tradeoffs: plan.tradeoffs,
+      excluded: plan.excluded.slice(0, 6).map((e) => ({ sku: e.sku, reason: e.reasons[0] })),
+      note: "The user sees this plan as a card with every alternative. Summarize in 2-4 short lines; ask before checkout unless they already asked to buy.",
+    };
   },
 
   async propose_cart(session, input, emit) {

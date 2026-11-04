@@ -137,6 +137,14 @@ app.post("/api/chat", async (req, res) => {
         flush();
         remember(s, { role: "policy_proposal", proposalId: event.proposal.id });
         break;
+      case "plan":
+        flush();
+        remember(s, { role: "plan", plan: event.plan });
+        break;
+      case "refund":
+        flush();
+        remember(s, { role: "refund", refund: event.refund });
+        break;
     }
   };
   const emit = (event) => {
