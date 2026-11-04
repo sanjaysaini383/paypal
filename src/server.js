@@ -51,6 +51,8 @@ function snapshot(s) {
     carts: [...s.carts.values()].slice(-10),
     proposals: [...s.policyProposals.values()].slice(-20),
     policyVersion: s.policyVersion,
+    policyHistory: s.policyHistory.slice(-10),
+    riskEvents: s.riskEvents,
     authorizations: [...s.authorizations.values()].slice(-20).map(publicAuthorization),
     orders: s.orders,
     audit: s.audit,

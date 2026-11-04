@@ -2,7 +2,7 @@
 // confused or prompt-injected agent still cannot spend outside the rules the
 // user set.
 import { VERIFIED_MERCHANTS, spentThisMonth, categorySpendThisMonth } from "./store.js";
-import { getProduct } from "./catalog.js";
+import { getProduct, CATALOG } from "./catalog.js";
 import { assessListing } from "./risk.js";
 
 export const CATEGORIES = ["outdoor", "electronics", "home", "grocery", "gift_cards", "books"];
@@ -164,5 +164,60 @@ export function diffPolicies(a, b) {
     if (la !== lb)
       out.push({ label: `${label(c)[0].toUpperCase() + label(c).slice(1)} limit`, from: la == null ? "No limit" : `${money(la)}/mo`, to: lb == null ? "No limit" : `${money(lb)}/mo` });
   }
+  return out;
+}
+
+// What a rule change would actually do, computed from the user's live data:
+// open carts and checkouts it would block, money already spent against new
+// caps, catalog listings newly excluded, and anything it loosens.
+export function policyImpact(session, current, next) {
+  const out = [];
+  const money = (n) => `$${Number(n).toFixed(2)}`;
+  const as = { ...session, policy: next };
+  const lineOf = (i) => ({ ...(getProduct(i.sku) || i), price: i.price, qty: i.qty });
+
+  for (const cart of session.carts.values()) {
+    if (!["proposed", "checkout"].includes(cart.status)) continue;
+    const before = checkCart(session, cart.items.map(lineOf), cart).length;
+    const after = checkCart(as, cart.items.map(lineOf), cart);
+    const what = cart.status === "checkout" ? `The checkout awaiting payment (${money(cart.total)})` : `Your current cart (${money(cart.total)})`;
+    if (!before && after.length) out.push({ kind: "tighten", text: `${what} would be blocked: ${after[0].message}` });
+    else if (before && !after.length) out.push({ kind: "loosen", text: `${what} would be allowed again.` });
+  }
+
+  const spent = categorySpendThisMonth(session);
+  for (const [cat, cap] of Object.entries(next.categoryLimits || {})) {
+    if (current.categoryLimits?.[cat] === cap) continue;
+    const used = spent[cat] || 0;
+    const name = cat.replace("_", " ");
+    out.push(
+      used > cap
+        ? { kind: "tighten", text: `You've already spent ${money(used)} on ${name} this month, over the new ${money(cap)} cap: further ${name} purchases are blocked until next month.` }
+        : { kind: "info", text: `${money(Math.max(0, cap - used))} of ${name} spending left this month under the new cap (${money(used)} already spent).` },
+    );
+  }
+
+  if (next.monthlyBudget !== current.monthlyBudget) {
+    const left = next.monthlyBudget - spentThisMonth(session);
+    out.push({
+      kind: next.monthlyBudget < current.monthlyBudget ? "tighten" : "loosen",
+      text: left < 0 ? `You're already ${money(-left)} over the new monthly budget: nothing more can be bought this month.` : `${money(left)} would be left to spend this month.`,
+    });
+  }
+
+  const ITEM = ["blocked_category", "low_rating", "item_price_cap", "unverified_merchant", "high_risk_listing"];
+  const excluded = (pol) => CATALOG.filter((p) => checkCart({ ...session, policy: pol }, [{ ...p, qty: 1 }], { total: 0 }).some((v) => ITEM.includes(v.rule))).length;
+  const delta = excluded(next) - excluded(current);
+  if (delta > 0) out.push({ kind: "tighten", text: `${delta} more catalog listing${delta === 1 ? "" : "s"} could no longer be bought.` });
+  if (delta < 0) out.push({ kind: "loosen", text: `${-delta} more catalog listing${delta === -1 ? "" : "s"} would become buyable.` });
+
+  if (current.blockHighRisk !== false && next.blockHighRisk === false)
+    out.push({ kind: "warning", text: "High-risk listings, including ones that hide instructions for AI agents, could be added to carts. Their text is still hidden from the AI." });
+  if (current.blockedCategories.includes("gift_cards") && !next.blockedCategories.includes("gift_cards"))
+    out.push({ kind: "warning", text: "Gift cards are a common target for scams and can't be refunded once redeemed." });
+  if ((next.autoApproveBelow || 0) > (current.autoApproveBelow || 0))
+    out.push({ kind: "loosen", text: `The agent may open PayPal checkout without asking you for carts up to ${money(next.autoApproveBelow)} from verified merchants. You still approve every payment in PayPal.` });
+  if (current.requireVerifiedMerchants && !next.requireVerifiedMerchants) out.push({ kind: "warning", text: "Unverified sellers become eligible; the risk engine still flags them." });
+  if (!out.length) out.push({ kind: "info", text: "No open carts or past spending are affected." });
   return out;
 }

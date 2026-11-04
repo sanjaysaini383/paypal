@@ -2,7 +2,7 @@
 // server and are the only way the agent can touch the catalog, the wallet or
 // PayPal. Every call is validated and written to the audit log.
 import { audit, newId, spentThisMonth, categorySpendThisMonth, VERIFIED_MERCHANTS } from "./store.js";
-import { checkCart, priceCart, applyPolicyChanges, TAX_RATE, CATEGORIES as CATEGORY_LIST } from "./policy.js";
+import { checkCart, priceCart, applyPolicyChanges, policyImpact, TAX_RATE, CATEGORIES as CATEGORY_LIST } from "./policy.js";
 import { CATALOG, getProduct } from "./catalog.js";
 import * as paypal from "./paypal.js";
 import { openCheckout } from "./checkout.js";
@@ -315,13 +315,16 @@ export const EXECUTORS = {
   },
 
   async propose_policy_change(session, input, emit) {
-    const { diff } = applyPolicyChanges(session.policy, input);
+    const { next, diff } = applyPolicyChanges(session.policy, input);
     if (!diff.length) return { error: "That wouldn't change any rule. Check the current policy with get_wallet_status." };
+    const impact = policyImpact(session, session.policy, next);
     const { summary, ...changes } = input;
     const proposal = {
       id: newId("rule"),
       summary: String(summary || "Update spending rules").slice(0, 300),
       diff,
+      impact,
+      basedOnVersion: session.policyVersion,
       changes, // re-applied to the policy as it is when the user clicks Apply
       status: "pending",
       createdAt: new Date().toISOString(),
@@ -333,7 +336,8 @@ export const EXECUTORS = {
       proposal_id: proposal.id,
       status: "waiting_for_user",
       changes: diff,
-      note: "Shown to the user with Apply / Dismiss buttons. Nothing has changed yet; don't say the rule is active.",
+      impact: impact.map((i) => i.text),
+      note: "Shown to the user with Apply / Dismiss buttons and these consequences. Nothing has changed yet; don't say the rule is active.",
     };
   },
 
