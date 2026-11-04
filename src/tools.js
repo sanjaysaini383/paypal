@@ -6,6 +6,7 @@ import { checkCart, priceCart, applyPolicyChanges, TAX_RATE, CATEGORIES as CATEG
 import { CATALOG, getProduct } from "./catalog.js";
 import * as paypal from "./paypal.js";
 import { openCheckout } from "./checkout.js";
+import { issueRefund } from "./refunds.js";
 
 export { CATALOG };
 const bySku = { get: getProduct, has: (sku) => !!getProduct(sku) };
@@ -334,37 +335,12 @@ export const EXECUTORS = {
   },
 
   async refund_order(session, input, emit) {
-    const order = session.orders.find((o) => o.orderId === input.order_id);
-    if (!order) return { error: "Unknown order_id. Call get_wallet_status to see captured orders." };
-    const remaining = round2(order.total - order.refunded);
-    if (remaining <= 0) return { error: "This order is already fully refunded." };
-
-    let amount;
-    let lines = [];
-    if (Array.isArray(input.skus) && input.skus.length) {
-      lines = order.items.filter((i) => input.skus.includes(i.sku) && !i.refunded);
-      if (!lines.length) return { error: "None of those SKUs are refundable on this order." };
-      const goods = lines.reduce((s, i) => s + i.price * i.qty, 0);
-      const tax = lines.filter((i) => i.category !== "gift_cards").reduce((s, i) => s + i.price * i.qty, 0) * 0.0825;
-      amount = Math.min(remaining, round2(goods + tax));
-      // Returning the last items refunds everything left, shipping included,
-      // so the order can reach REFUNDED instead of stalling a few dollars short.
-      if (order.items.every((i) => i.refunded || lines.includes(i))) amount = remaining;
-    } else {
-      amount = remaining;
-      lines = order.items.filter((i) => !i.refunded);
-    }
-
-    const reason = String(input.reason || "Refund").slice(0, 200);
-    const key = `refund-${order.captureId}-${lines.map((l) => l.sku).sort().join("+")}`;
-    const refund = await paypal.refundCapture(order.captureId, amount, reason, key);
-    order.refunded = round2(order.refunded + refund.amount);
-    for (const l of lines) l.refunded = true;
-    order.status = order.refunded >= order.total - 0.005 ? "REFUNDED" : "PARTIALLY_REFUNDED";
-    order.refunds.push({ id: refund.refundId, amount: refund.amount, reason, at: new Date().toISOString() });
-    audit(session, "paypal", "refund", `Refund ${refund.refundId} of $${refund.amount.toFixed(2)} on order ${order.orderId}: ${reason}`);
+    if (typeof input.order_id !== "string") throw new Error("order_id must be a string");
+    const r = await issueRefund(session, input);
+    if (r.error) return r;
+    emit({ type: "refund", refund: r });
     emit({ type: "ledger" });
-    return { refund_id: refund.refundId, status: refund.status, amount: refund.amount, order_status: order.status };
+    return r;
   },
 };
 

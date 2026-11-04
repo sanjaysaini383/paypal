@@ -180,7 +180,9 @@ export function categorySpendThisMonth(session) {
   for (const o of session.orders.filter(countsAsSpend)) {
     const d = new Date(o.capturedAt);
     if (d.getUTCFullYear() !== now.getUTCFullYear() || d.getUTCMonth() !== now.getUTCMonth()) continue;
-    for (const i of o.items) if (!i.refunded) out[i.category] = Math.round(((out[i.category] || 0) + i.price * i.qty) * 100) / 100;
+    // A line stops counting once its refund completed, not while it's pending.
+    const pending = new Set((o.refunds || []).filter((r) => r.status === "PENDING").flatMap((r) => r.skus || []));
+    for (const i of o.items) if (i.refunded !== true || pending.has(i.sku)) out[i.category] = Math.round(((out[i.category] || 0) + i.price * i.qty) * 100) / 100;
   }
   return out;
 }
