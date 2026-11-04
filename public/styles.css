@@ -85,6 +85,7 @@
 
 /* ------------------------------------------------------------------ base */
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; }
 body {
   background: var(--bg);
@@ -508,3 +509,116 @@ a { color: var(--accent-text); }
 .chart-table th, .chart-table td { text-align: left; padding: 7px 4px; border-bottom: 1px solid var(--border); }
 .chart-table th { color: var(--muted); font-weight: 500; }
 .chart-table td:last-child, .chart-table th:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ------------------------------------------------------------------ brand + environment */
+.brand-text { display: flex; flex-direction: column; line-height: 1.15; }
+.brand-tag { font-size: 11px; color: var(--muted); font-weight: 500; letter-spacing: 0; }
+@media (max-width: 760px) { .brand-tag { display: none; } }
+.modes { display: flex; gap: 6px; margin: 0 auto 0 20px; min-width: 0; overflow: hidden; }
+.mode { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 99px; font-size: 11.5px; font-weight: 600; white-space: nowrap; border: 1px solid var(--border); color: var(--text-2); background: var(--surface); }
+.mode .lucide { width: 13px; height: 13px; }
+.mode.sim { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.mode.sandbox { background: var(--accent-soft); color: var(--accent-text); border-color: transparent; }
+.mode.live { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
+.mode.ok { color: var(--ok); }
+.mode.ai { text-transform: none; }
+@media (max-width: 900px) { .mode.ai, .mode.ok { display: none; } }
+@media (max-width: 560px) { .modes { margin-left: 8px; } #demo-btn span { display: none; } }
+
+/* ------------------------------------------------------------------ plan + refund cards */
+.plan, .refund-card { margin-left: 40px; max-width: min(620px, calc(100% - 40px)); border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.plan-head { display: flex; align-items: flex-start; gap: 12px; }
+.plan-head > div { flex: 1; min-width: 0; }
+.plan-head strong { display: block; font-size: 13.5px; }
+.plan-head small { display: block; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.plan-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; background: var(--accent-soft); color: var(--accent-text); flex: none; }
+.plan-icon.ok { background: var(--ok-soft); color: var(--ok); }
+.plan-icon.bad { background: var(--bad-soft); color: var(--bad); }
+.plan-total { font-size: 18px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.meter { height: 6px; border-radius: 99px; background: var(--surface-3); overflow: hidden; }
+.meter > div { height: 100%; border-radius: 99px; background: linear-gradient(90deg, #10b981, #059669); }
+.meter-legend { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; color: var(--muted); margin-top: -4px; }
+.plan-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.plan-table td { padding: 7px 6px; border-top: 1px solid var(--border); vertical-align: top; }
+.plan-table td.slot { color: var(--muted); white-space: nowrap; width: 1%; padding-left: 0; font-weight: 500; }
+.plan-table .nm { display: block; font-weight: 500; color: var(--text); }
+.plan-table small { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11.5px; }
+.plan-table small .lucide { width: 12px; height: 12px; flex: none; }
+.plan-table td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 600; padding-right: 0; }
+.plan-table tr.skipped td { opacity: .75; }
+.plan-table tr.total td { font-weight: 700; color: var(--text); }
+.plan-more { font-size: 12.5px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.plan-more summary { cursor: pointer; display: flex; align-items: center; gap: 7px; padding: 8px 10px; font-weight: 500; color: var(--text-2); list-style: none; }
+.plan-more summary::-webkit-details-marker { display: none; }
+.plan-more summary .lucide { width: 14px; height: 14px; color: var(--muted); }
+.plan-more ul { margin: 0; padding: 0 12px 10px 28px; color: var(--text-2); }
+.plan-more li { margin: 4px 0; }
+.plan-more ul.excluded { list-style: none; padding-left: 12px; display: flex; flex-direction: column; gap: 6px; }
+.excluded li { display: grid; grid-template-columns: auto 1fr; gap: 8px; }
+.excluded .mono { font-size: 11px; color: var(--bad); padding-top: 1px; }
+.excluded small { display: block; color: var(--muted); }
+.plan-notes { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--text-2); }
+.plan-blocked, .refund-note { display: flex; gap: 6px; align-items: flex-start; font-size: 12px; color: var(--muted); margin: 0; }
+.plan-blocked { color: var(--bad); }
+.plan-blocked .lucide, .refund-note .lucide { width: 13px; height: 13px; margin-top: 2px; flex: none; }
+@media (max-width: 640px) { .plan, .refund-card { margin-left: 0; max-width: 100%; } }
+
+/* ------------------------------------------------------------------ risk */
+.risk { font-size: 11.5px; border-radius: 8px; }
+.risk summary { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; padding: 2px 8px; border-radius: 99px; font-weight: 600; user-select: none; }
+.risk summary::-webkit-details-marker { display: none; }
+.risk-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.risk-score { font-variant-numeric: tabular-nums; opacity: .75; font-weight: 500; }
+.risk.low summary { background: var(--ok-soft); color: var(--ok); }
+.risk.medium summary { background: var(--warn-soft); color: var(--warn); }
+.risk.high summary { background: var(--bad-soft); color: var(--bad); }
+.risk-body { margin-top: 6px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); color: var(--text-2); }
+.risk-body ul { list-style: none; margin: 0 0 6px; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.risk-body li { display: grid; grid-template-columns: auto 1fr; gap: 6px; align-items: start; line-height: 1.4; }
+.sig { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 1px 5px; border-radius: 4px; margin-top: 1px; }
+.sig.observed { background: var(--accent-soft); color: var(--accent-text); }
+.sig.inferred { background: var(--surface-3); color: var(--muted); }
+.risk-action { display: flex; gap: 5px; align-items: flex-start; font-weight: 500; margin: 0; }
+.risk-action .lucide { width: 12px; height: 12px; margin-top: 2px; flex: none; }
+.risk-basis { margin: 4px 0 0; color: var(--muted); font-size: 10.5px; }
+.risk-inline { font-size: 12px; font-weight: 600; }
+.risk-inline.low { color: var(--ok); } .risk-inline.medium { color: var(--warn); } .risk-inline.high { color: var(--bad); }
+
+/* ------------------------------------------------------------------ proposal impact */
+.impact { padding: 0 16px 12px; }
+.impact-title { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text-2); margin-bottom: 6px; }
+.impact-title .lucide { width: 13px; height: 13px; color: var(--muted); }
+.impact ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.impact li { display: flex; gap: 7px; align-items: flex-start; font-size: 12.5px; padding: 6px 9px; border-radius: 8px; background: var(--surface-2); color: var(--text-2); }
+.impact li .lucide { width: 13px; height: 13px; margin-top: 2px; flex: none; }
+.impact li.tighten .lucide { color: var(--accent-text); }
+.impact li.loosen .lucide, .impact li.warning .lucide { color: var(--warn); }
+.impact li.warning { background: var(--warn-soft); }
+.impact li.info .lucide { color: var(--muted); }
+
+/* ------------------------------------------------------------------ authorization */
+.auth { margin-top: 14px; border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: linear-gradient(180deg, var(--surface-2), var(--surface)); }
+.auth.bound { border-color: color-mix(in srgb, var(--ok) 35%, var(--border)); }
+.auth.revoked, .auth.expired { border-color: color-mix(in srgb, var(--bad) 35%, var(--border)); }
+.auth-head { display: flex; align-items: center; gap: 10px; }
+.auth-head > div { flex: 1; min-width: 0; }
+.auth-head strong { display: block; font-size: 12.5px; }
+.auth-head small { display: block; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+.auth-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: var(--ok-soft); color: var(--ok); flex: none; }
+.auth.revoked .auth-icon, .auth.expired .auth-icon, .auth.cancelled .auth-icon { background: var(--bad-soft); color: var(--bad); }
+.auth-icon .lucide { width: 15px; height: 15px; }
+.auth-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin: 10px 0 8px; }
+.auth-grid div { min-width: 0; }
+.auth-grid .wide { grid-column: 1 / -1; }
+.auth-grid dt { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+.auth-grid dd { margin: 1px 0 0; font-size: 12.5px; font-weight: 500; font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 5px; overflow-wrap: anywhere; }
+.auth-grid dd .lucide { width: 13px; height: 13px; flex: none; }
+.auth-grid dd.ok { color: var(--ok); } .auth-grid dd.bad { color: var(--bad); }
+[data-expires].soon { color: var(--warn); }
+.auth-note { font-size: 11.5px; color: var(--muted); margin: 0; }
+.badge.auth-bound { background: var(--ok-soft); color: var(--ok); }
+.badge.auth-consumed { background: var(--surface-3); color: var(--text-2); }
+.badge.auth-revoked, .badge.auth-expired, .badge.auth-cancelled { background: var(--bad-soft); color: var(--bad); }
+.badge.authorizing, .badge.capturing, .badge.pending { background: var(--warn-soft); color: var(--warn); }
+.badge.expired, .badge.denied { background: var(--bad-soft); color: var(--bad); }
+.paid-note.pending { background: var(--warn-soft); color: var(--warn); }

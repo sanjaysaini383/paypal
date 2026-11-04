@@ -8,7 +8,7 @@ import { runAgent, aiMode, MODEL } from "./agent.js";
 import { editCart } from "./tools.js";
 import * as paypal from "./paypal.js";
 import { captureCheckout, rejectCart } from "./checkout.js";
-import { publicAuthorization, expireStale } from "./authorization.js";
+import { publicAuthorization, expireStale, AUTH_TTL_MS } from "./authorization.js";
 import { receiveWebhook } from "./webhooks.js";
 import { detectPurchaseIntent } from "./validate.js";
 import { analytics, parseFilters } from "./analytics.js";
@@ -68,7 +68,15 @@ function snapshot(s) {
 }
 
 app.get("/api/config", (req, res) => {
-  res.json({ aiMode, model: MODEL, paypalMode: paypal.paypalMode, paypalClientId: paypal.paypalClientId, repoUrl: process.env.REPO_URL || null });
+  res.json({
+    aiMode,
+    model: MODEL,
+    paypalMode: paypal.paypalMode,
+    paypalClientId: paypal.paypalClientId,
+    webhooks: paypal.paypalMode !== "simulated" && !!process.env.PAYPAL_WEBHOOK_ID,
+    authTtlMinutes: AUTH_TTL_MS / 60_000,
+    repoUrl: process.env.REPO_URL || null,
+  });
 });
 
 app.get("/api/state", (req, res) => res.json(snapshot(session(req))));

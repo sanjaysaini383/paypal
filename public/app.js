@@ -4,7 +4,8 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const CATEGORIES = ["outdoor", "electronics", "home", "grocery", "gift_cards", "books"];
 const CATEGORY_ICONS = { outdoor: "tent", electronics: "cpu", home: "lamp", grocery: "coffee", gift_cards: "gift", books: "book-open" };
-const TOOL_ICONS = { search_catalog: "search", get_wallet_status: "wallet", propose_cart: "shopping-cart", create_paypal_checkout: "credit-card", refund_order: "undo-2", propose_policy_change: "shield-check", show_products: "layout-grid" };
+const TOOL_ICONS = { search_catalog: "search", get_wallet_status: "wallet", propose_cart: "shopping-cart", create_paypal_checkout: "credit-card", refund_order: "undo-2", propose_policy_change: "shield-check", show_products: "layout-grid", plan_purchase: "route", get_risk_report: "shield-alert" };
+const MODE_LABELS = { simulated: "Simulated PayPal", sandbox: "PayPal sandbox", live: "PayPal live" };
 const LOGO = '<svg viewBox="0 0 32 32"><path d="M8 10h3l2.5 10h9l2-7H12" /><circle cx="14" cy="24" r="1.6" /><circle cx="21" cy="24" r="1.6" /></svg>';
 const fmt = (n) => "$" + Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -100,6 +101,7 @@ async function boot() {
 
   config = await (await api("/api/config")).json();
   if (config.repoUrl && /github\.com\/[^/]+\/[^/]+/.test(config.repoUrl)) $("#repo-link").href = config.repoUrl;
+  renderModes();
 
   $("#cat-checks").innerHTML = CATEGORIES.map(
     (c) => `<label class="toggle-chip"><input type="checkbox" value="${c}" /><span>${c.replace("_", " ")}</span></label>`,
@@ -110,7 +112,113 @@ async function boot() {
   moveTabIndicator(false);
   await refresh();
   renderHistory(state.transcript);
-  if (config.paypalMode === "sandbox") loadPayPalSdk();
+  if (config.paypalMode === "sandbox" || config.paypalMode === "live") loadPayPalSdk();
+}
+
+// Which AI and which payment rail are live: never ambiguous about real money.
+function renderModes() {
+  const pay = {
+    simulated: ["sim", "flask-conical", "Simulated payments", "No PayPal credentials configured: a local simulator stands in for PayPal and no money moves."],
+    sandbox: ["sandbox", "test-tube", "PayPal sandbox", "Real PayPal REST APIs with test accounts and test money."],
+    live: ["live", "badge-dollar-sign", "PayPal LIVE", "Real money: captures move funds from real PayPal accounts."],
+  }[config.paypalMode] || ["sim", "circle-help", config.paypalMode, ""];
+  const ai = config.aiMode === "offline" ? ["Offline planner", "Rule-based planner driving the same tools (no AI key configured)."] : [`${config.aiMode} · ${config.model}`, "LLM agent with tool use."];
+  $("#modes").innerHTML = `
+    <span class="mode ${pay[0]}" title="${esc(pay[3])}">${icon(pay[1])}${esc(pay[2])}</span>
+    <span class="mode ai" title="${esc(ai[1])}">${icon("bot")}${esc(ai[0])}</span>
+    ${config.webhooks ? `<span class="mode ok" title="PayPal webhooks are verified and reconciled">${icon("webhook")}Webhooks</span>` : ""}`;
+  refreshIcons();
+}
+
+// Live countdown for authorizations waiting on the buyer.
+function tickCountdowns() {
+  for (const el of document.querySelectorAll("[data-expires]")) {
+    const ms = Date.parse(el.dataset.expires) - Date.now();
+    el.textContent = ms > 0 ? `${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, "0")}` : "expired";
+    el.classList.toggle("soon", ms > 0 && ms < 120000);
+  }
+}
+setInterval(tickCountdowns, 1000);
+
+// ------------------------------------------------------------------ risk
+const RISK_LABEL = { low: "Low risk", medium: "Medium risk", high: "High risk" };
+function riskDetails(risk, { compact = false } = {}) {
+  if (!risk) return "";
+  const signals = risk.signals.filter((x) => x.weight > 0 || x.id === "category_restricted" || x.id === "unavailable");
+  return `<details class="risk ${risk.level}${compact ? " compact" : ""}">
+    <summary><span class="risk-dot"></span>${RISK_LABEL[risk.level]}<span class="risk-score">${risk.score}</span></summary>
+    <div class="risk-body">
+      ${signals.length ? `<ul>${signals.map((x) => `<li><span class="sig ${x.kind}">${x.kind}</span><span><b>${esc(x.label)}</b> ${esc(x.detail)}</span></li>`).join("")}</ul>` : `<p>No risk signals.</p>`}
+      <p class="risk-action">${icon(risk.action.type === "blocked" ? "shield-ban" : risk.action.type === "warn" ? "triangle-alert" : "shield-check")}${esc(risk.action.detail)}</p>
+      <p class="risk-basis">Heuristic score (0-100) from the signals above, not a fraud probability.</p>
+    </div>
+  </details>`;
+}
+
+// ------------------------------------------------------------------ plan, refund cards
+function excludedBlock(plan) {
+  if (!plan.excluded?.length) return "";
+  return `<details class="plan-more"><summary>${icon("shield-ban")}Excluded by your rules or the risk engine (${plan.excluded.length})</summary>
+    <ul class="excluded">${plan.excluded
+      .map((e) => `<li><span class="mono">${esc(e.sku)}</span><span><b>${esc(e.name)}</b> · ${esc(e.merchant)} · ${fmt(e.price)}<small>${e.reasons.map(esc).join(" ")}</small></span></li>`)
+      .join("")}</ul></details>`;
+}
+
+function renderPlan(plan) {
+  $("#welcome")?.remove();
+  const el = document.createElement("section");
+  el.className = "plan";
+  if (!plan.feasible) {
+    el.innerHTML = `<div class="plan-head"><span class="plan-icon bad">${icon("route")}</span><div><strong>No plan fits your limits</strong><small>${esc(plan.reason)}</small></div></div>
+      <ul class="plan-notes">${(plan.suggestions || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>${excludedBlock(plan)}`;
+  } else {
+    const merchants = new Set(plan.items.map((i) => i.merchant)).size;
+    const pct = Math.min(100, (plan.totals.total / plan.budget.effective) * 100);
+    el.innerHTML = `
+      <div class="plan-head">
+        <span class="plan-icon">${icon("route")}</span>
+        <div><strong>Optimized shopping plan</strong><small>${plan.items.length} items from ${merchants} merchant${merchants === 1 ? "" : "s"} · limit ${fmt(plan.budget.effective)} (${esc(plan.budget.binding)})</small></div>
+        <span class="plan-total">${fmt(plan.totals.total)}</span>
+      </div>
+      <div class="meter" role="img" aria-label="${fmt(plan.totals.total)} of ${fmt(plan.budget.effective)}"><div style="width:${pct}%"></div></div>
+      <div class="meter-legend"><span>Total incl. ${fmt(plan.totals.tax)} tax${plan.totals.shipping ? ` and ${fmt(plan.totals.shipping)} shipping` : ", free shipping"}</span><span>${fmt(plan.headroom)} headroom</span></div>
+      <table class="plan-table"><tbody>
+        ${plan.items
+          .map(
+            (i) => `<tr><td class="slot">${esc(i.slot)}</td><td><span class="nm">${esc(i.name)}${i.qty > 1 ? ` <b>×${i.qty}</b>` : ""}</span><small>${esc(i.merchant)} · ★ ${i.rating} (${i.reviews.toLocaleString("en-US")}) · ${esc(i.why)}</small></td><td class="num">${fmt(i.line_total)}</td></tr>`,
+          )
+          .join("")}
+        ${plan.skipped.map((x) => `<tr class="skipped"><td class="slot">${esc(x.slot)}</td><td colspan="2"><small>${icon("circle-minus")}${esc(x.reason)}</small></td></tr>`).join("")}
+      </tbody></table>
+      ${plan.tradeoffs?.length ? `<details class="plan-more"><summary>${icon("scale")}Trade-offs considered (${plan.tradeoffs.length})</summary><ul>${plan.tradeoffs.map((t) => `<li>${esc(t)}</li>`).join("")}</ul></details>` : ""}
+      ${excludedBlock(plan)}
+      ${plan.cart_status === "blocked" ? `<p class="plan-blocked">${icon("shield-ban")}The guardrails blocked the resulting cart; see the cart for why.</p>` : ""}`;
+  }
+  messagesEl.append(el);
+  refreshIcons();
+  enter(el);
+  scrollDown();
+}
+
+function renderRefund(r) {
+  $("#welcome")?.remove();
+  const c = r.calculation;
+  const el = document.createElement("section");
+  el.className = "refund-card";
+  el.innerHTML = `
+    <div class="plan-head"><span class="plan-icon ok">${icon("undo-2")}</span>
+      <div><strong>PayPal refund ${r.status === "COMPLETED" ? "completed" : "submitted (pending at PayPal)"}</strong><small class="mono">${esc(r.refund_id)} · order ${esc(r.order_id)} · ${esc(MODE_LABELS[config.paypalMode] || config.paypalMode)}</small></div>
+      <span class="plan-total">${fmt(r.amount)}</span></div>
+    <table class="plan-table"><tbody>
+      ${c.lines.map((l) => `<tr><td><span class="nm">${esc(l.name)}${l.qty > 1 ? ` <b>×${l.qty}</b>` : ""}</span><small>${fmt(l.goods)} item + ${fmt(l.tax)} tax</small></td><td class="num">${fmt(l.goods + l.tax)}</td></tr>`).join("")}
+      ${c.shipping ? `<tr><td><span class="nm">Shipping</span><small>Refunded because nothing else is left on the order</small></td><td class="num">${fmt(c.shipping)}</td></tr>` : ""}
+      <tr class="total"><td>Refund total</td><td class="num">${fmt(r.amount)}</td></tr>
+    </tbody></table>
+    <p class="refund-note">${icon("info")}Calculated on the server from the authorized order snapshot. Order is now <b>${esc(r.order_status.replace(/_/g, " ").toLowerCase())}</b>.</p>`;
+  messagesEl.append(el);
+  refreshIcons();
+  enter(el);
+  scrollDown();
 }
 
 // ------------------------------------------------------------------ product cards
@@ -130,17 +238,18 @@ function renderProducts({ title, items }) {
         (p) => `<article class="product" data-sku="${esc(p.sku)}">
           <div class="p-media cat-${esc(p.category)}">${icon(CATEGORY_ICONS[p.category] || "package")}
             ${p.stock <= 10 ? `<span class="p-tag">Only ${p.stock} left</span>` : ""}
-            ${p.flagged ? `<span class="p-tag bad">Suspicious listing</span>` : ""}</div>
+            ${p.flagged ? `<span class="p-tag bad">Hidden AI instructions</span>` : ""}</div>
           <div class="p-body">
             <span class="p-merchant">${esc(p.merchant)}${p.verified ? icon("badge-check") : ""}</span>
             <h4 title="${esc(p.name)}">${esc(p.name)}</h4>
             <span class="p-rating">${stars(p.rating)}<b>${p.rating}</b><span>(${p.reviews.toLocaleString("en-US")})</span></span>
             ${p.note ? `<p class="p-note">${esc(p.note)}</p>` : ""}
+            ${riskDetails(p.risk, { compact: true })}
             <div class="p-foot">
               <span class="p-price">${fmt(p.price)}</span>
               <label class="p-compare" title="Compare"><input type="checkbox" value="${esc(p.sku)}" /><span>Compare</span></label>
             </div>
-            <button type="button" class="btn btn-primary btn-sm btn-block p-add"${p.flagged ? " disabled" : ""}>${icon("plus")}Add to cart</button>
+            <button type="button" class="btn btn-primary btn-sm btn-block p-add"${p.flagged || p.risk?.action?.type === "blocked" ? ` disabled title="Blocked: high-risk listing"` : ""}>${icon(p.risk?.action?.type === "blocked" ? "shield-ban" : "plus")}${p.risk?.action?.type === "blocked" ? "Blocked" : "Add to cart"}</button>
           </div>
         </article>`,
       )
@@ -195,6 +304,7 @@ function openCompare(products) {
     ["Reviews", (p) => p.reviews.toLocaleString("en-US"), (p) => p.reviews === best("reviews", "max")],
     ["Store", (p) => `${esc(p.merchant)}${p.verified ? ` ${icon("badge-check")}` : ""}`],
     ["In stock", (p) => String(p.stock)],
+    ["Risk", (p) => (p.risk ? `<span class="risk-inline ${p.risk.level}">${RISK_LABEL[p.risk.level]} · ${p.risk.score}</span>` : "—"), (p) => p.risk?.level === "low"],
     ["Why it fits", (p) => esc(p.note || "—")],
   ];
   $("#compare-body").innerHTML = `<table>
@@ -245,6 +355,7 @@ function paintProposal(card, p) {
     <ul class="diff">${p.diff
       .map((d) => `<li><span class="d-label">${esc(d.label)}</span><span class="d-from">${esc(d.from)}</span>${icon("arrow-right")}<span class="d-to">${esc(d.to)}</span></li>`)
       .join("")}</ul>
+    ${p.impact?.length ? `<div class="impact"><span class="impact-title">${icon("radar")}What this would do</span><ul>${p.impact.map((i) => `<li class="${esc(i.kind)}">${icon({ tighten: "lock", loosen: "lock-open", warning: "triangle-alert", info: "info" }[i.kind] || "info")}<span>${esc(i.text)}</span></li>`).join("")}</ul></div>` : ""}
     ${p.status === "pending" ? `<div class="proposal-actions"><button class="btn btn-primary" data-act="apply">${icon("check")}Apply rule</button><button class="btn btn-secondary" data-act="dismiss">Dismiss</button></div>` : ""}`;
   card.querySelectorAll("[data-act]").forEach((b) =>
     b.addEventListener("click", async () => {
@@ -397,6 +508,8 @@ const TOOL_LABELS = {
   refund_order: (i) => (i.skus?.length ? `Refunding ${i.skus.length} item${i.skus.length === 1 ? "" : "s"}` : "Refunding order"),
   propose_policy_change: () => "Drafting a spending-rule change",
   show_products: (i) => `Showing ${(i.products || []).length} options`,
+  plan_purchase: (i) => `Optimizing ${(i.slots || []).length} item types${i.budget ? ` within $${i.budget}` : ""}`,
+  get_risk_report: (i) => `Checking risk for ${(i.skus || []).join(", ")}`,
 };
 
 // One collapsible "activity" block per run of tool calls.
@@ -438,7 +551,7 @@ function addStep(activity, { name, input }) {
 }
 
 function completeStep(activity, li, { ok, summary }) {
-  const warn = /suspicious|Blocked/.test(summary || "");
+  const warn = /suspicious|Blocked|high-risk|No plan fits/.test(summary || "");
   li.className = "step " + (!ok ? "bad" : warn ? "warn" : "ok");
   if (!ok && activity) activity.failed++;
   $(".res", li).innerHTML = `<span>${esc(summary || "")}</span>${icon(!ok ? "circle-x" : warn ? "triangle-alert" : "check")}`;
@@ -464,6 +577,8 @@ function renderHistory(entries) {
       for (const step of e.steps) completeStep(a, addStep(a, step), step);
       a.finish(e.secs);
     } else if (e.role === "products") renderProducts(e);
+    else if (e.role === "plan") renderPlan(e.plan);
+    else if (e.role === "refund") renderRefund(e.refund);
     else if (e.role === "policy_proposal") {
       const p = state.proposals.find((x) => x.id === e.proposalId);
       if (p) renderProposal(p);
@@ -527,6 +642,14 @@ async function send(text) {
       case "products":
         closeActivity();
         renderProducts(ev);
+        break;
+      case "plan":
+        closeActivity();
+        renderPlan(ev.plan);
+        break;
+      case "refund":
+        closeActivity();
+        renderRefund(ev.refund);
         break;
       case "policy_proposal":
         closeActivity();
@@ -612,7 +735,29 @@ $("#reset-btn").addEventListener("click", async () => {
 });
 
 // ------------------------------------------------------------------ cart + PayPal
-const STATUS_LABELS = { proposed: "Review", checkout: "Awaiting payment", capturing: "Processing", paid: "Paid", blocked: "Blocked", rejected: "Cancelled" };
+const STATUS_LABELS = { proposed: "Review", authorizing: "Authorizing", checkout: "Awaiting payment", capturing: "Verifying & capturing", paid: "Paid", pending: "Payment pending", blocked: "Blocked", rejected: "Cancelled", expired: "Expired", denied: "Denied by PayPal" };
+const AUTH_LABELS = { issued: "Issued", bound: "Active", consumed: "Used", cancelled: "Cancelled", expired: "Expired", revoked: "Revoked" };
+
+// The signed authorization that limits what PayPal can capture for this cart.
+function authPanel(cart) {
+  const a = state.authorizations?.find((x) => x.id === cart.authorizationId);
+  if (!a) return "";
+  const live = a.status === "bound";
+  return `<div class="auth ${a.status}">
+    <div class="auth-head"><span class="auth-icon">${icon("fingerprint")}</span>
+      <div><strong>Purchase authorization</strong><small class="mono">${esc(a.id)}</small></div>
+      <span class="badge auth-${a.status}">${AUTH_LABELS[a.status] || a.status}</span></div>
+    <dl class="auth-grid">
+      <div><dt>Max charge</dt><dd>${fmt(a.maxAmount)} ${esc(a.currency)}</dd></div>
+      <div><dt>Locked items</dt><dd>${a.items.length} (${a.items.reduce((n, i) => n + i.qty, 0)} units)</dd></div>
+      <div><dt>Policy</dt><dd>v${a.policyVersion} · ${esc(a.policyHash.slice(0, 6))}</dd></div>
+      <div><dt>${live ? "Expires in" : "Expiry"}</dt><dd ${live ? `data-expires="${esc(a.expiresAt)}"` : ""}>${live ? "…" : new Date(a.expiresAt).toLocaleTimeString()}</dd></div>
+      <div class="wide"><dt>PayPal order</dt><dd class="mono">${esc(a.paypalOrderId || "not created")}</dd></div>
+      <div class="wide"><dt>Integrity</dt><dd class="mono ${a.integrity === "valid" ? "ok" : "bad"}">${icon(a.integrity === "valid" ? "shield-check" : "shield-x")}HMAC-SHA256 ${esc(a.signature)}… ${a.integrity === "valid" ? "verified" : "INVALID"}</dd></div>
+    </dl>
+    <p class="auth-note">${live ? "PayPal can capture exactly this: same items, prices, payee and total, once, before it expires. Rules are re-checked at capture." : esc(a.events.at(-1)?.detail || "")}</p>
+  </div>`;
+}
 let renderedCheckout = null;
 let lastCartKey = null;
 
@@ -671,6 +816,7 @@ function renderCart() {
       <div><span>Shipping</span><span>${cart.shipping ? fmt(cart.shipping) : "Free"}</span></div>
       <div class="grand"><span>Total</span><span>${fmt(cart.total)}</span></div>
     </div>
+    ${authPanel(cart)}
     <div class="cart-actions" id="cart-actions"></div>`;
 
   const actions = $("#cart-actions");
@@ -681,9 +827,11 @@ function renderCart() {
   } else if (cart.status === "checkout") {
     renderedCheckout = cart.id;
     mountCheckout(cart, actions);
-  } else if (cart.status === "paid") {
+  } else if (cart.status === "paid" || cart.status === "pending") {
     const order = state.orders.find((o) => o.cartId === cart.id);
-    actions.innerHTML = `<div class="paid-note">${icon("circle-check")}<span>Paid with PayPal<small>${esc(order?.orderId || cart.paypalOrderId)}</small></span></div>`;
+    actions.innerHTML = `<div class="paid-note${cart.status === "pending" ? " pending" : ""}">${icon(cart.status === "pending" ? "hourglass" : "circle-check")}<span>${cart.status === "pending" ? "Submitted to PayPal, waiting for it to settle" : `Paid via ${esc(MODE_LABELS[order?.mode || config.paypalMode] || "PayPal")}`}<small>${esc(order?.orderId || cart.paypalOrderId)} · capture ${esc(order?.captureId || "")}</small></span></div>`;
+  } else if (cart.status === "expired" || cart.status === "denied") {
+    actions.innerHTML = `<p class="blocked-note">${cart.status === "expired" ? "The authorization expired before payment. Ask the agent to check out again for a fresh one." : "PayPal denied this payment; no money was taken."}</p>`;
   } else if (cart.status === "blocked") {
     actions.innerHTML = `<p class="blocked-note">This cart breaks your spending rules. The agent will adjust it, or you can change the rules below.</p>`;
   }
@@ -707,15 +855,15 @@ async function rejectCart(id) {
 }
 
 function mountCheckout(cart, actions) {
-  const sandbox = config.paypalMode === "sandbox";
+  const sandbox = config.paypalMode === "sandbox" || config.paypalMode === "live";
   actions.innerHTML = `<div id="paypal-buttons"></div>
-    <p class="secure-note">${icon("lock")}${sandbox ? "Secure PayPal checkout · sandbox test payment" : "Demo mode · no real payment is made"}</p>
+    <p class="secure-note">${icon("lock")}${sandbox ? (config.paypalMode === "live" ? "Secure PayPal checkout · real payment" : "Secure PayPal checkout · sandbox test payment") : "Simulated PayPal · no real money moves"}</p>
     <button class="btn btn-ghost" id="reject">Cancel order</button>`;
   $("#reject").onclick = () => rejectCart(cart.id);
   const target = $("#paypal-buttons");
 
   if (!sandbox) {
-    target.innerHTML = `<button class="btn btn-primary btn-block" id="sim-approve">${icon("credit-card")}Approve ${fmt(cart.total)}</button>`;
+    target.innerHTML = `<button class="btn btn-primary btn-block" id="sim-approve">${icon("credit-card")}Approve ${fmt(cart.total)} in simulator</button>`;
     $("#sim-approve").onclick = () => capture(cart.paypalOrderId);
     return;
   }
@@ -737,15 +885,27 @@ async function capture(orderId, actionsApi) {
   const body = await res.json().catch(() => ({}));
   if (res.ok) {
     renderedCheckout = null;
-    toast("ok", `Payment complete · ${fmt(body.order.total)}`, "Your order is in Purchases below.");
-    addRow("agent", formatText(`Payment complete: **${fmt(body.order.total)}** paid with PayPal. You'll find the order in Purchases below.`));
+    const pending = body.order.status === "PENDING";
+    toast(pending ? "info" : "ok", `${pending ? "Payment submitted" : "Payment captured"} · ${fmt(body.order.total)}`, `Authorization ${body.order.authorizationId} verified and used.`);
+    addRow(
+      "agent",
+      formatText(
+        pending
+          ? `Payment submitted: **${fmt(body.order.total)}** via ${MODE_LABELS[body.order.mode]}. PayPal is still processing it; the ledger updates when it settles.`
+          : `Payment complete: **${fmt(body.order.total)}** via ${MODE_LABELS[body.order.mode]}. Authorization ${body.order.authorizationId} matched the PayPal order exactly and is now used up.`,
+      ),
+    );
     state = body.state;
     render();
     return;
   }
   // Recoverable decline: reopen PayPal so the buyer can choose another funding source.
   if (body.issue === "INSTRUMENT_DECLINED" && actionsApi?.restart) return actionsApi.restart();
-  toast("bad", "Payment failed", body.error || "Capture failed");
+  if (res.status === 403) {
+    renderedCheckout = null;
+    toast("bad", "Capture blocked by CartPilot", (body.problems || []).map((x) => x.message).join(" ") || body.error);
+    addRow("error", esc(`${body.error}`));
+  } else toast("bad", "Payment not completed", body.error || "Capture failed");
   refresh();
 }
 
