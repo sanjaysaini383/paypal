@@ -8,7 +8,9 @@ import path from "node:path";
 
 const PORT = 3988;
 const BASE = `http://localhost:${PORT}`;
-const DATA_FILE = path.join(os.tmpdir(), `cartpilot-persist-${process.pid}.json`);
+// Its own directory: the signing key is saved next to the data file.
+const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "cartpilot-persist-"));
+const DATA_FILE = path.join(DATA_DIR, "sessions.json");
 const SID = "test_persist_session";
 
 function start() {
@@ -24,7 +26,7 @@ const stop = (child) => new Promise((r) => (child.on("exit", r), child.kill()));
 const api = (p, opts = {}) => fetch(BASE + p, { ...opts, headers: { "Content-Type": "application/json", "X-Session-Id": SID } });
 
 test("carts, orders and the chat transcript survive a restart", async (t) => {
-  t.after(() => fs.rmSync(DATA_FILE, { force: true }));
+  t.after(() => fs.rmSync(DATA_DIR, { recursive: true, force: true }));
   let server = await start();
   await (await api("/api/chat", { method: "POST", body: JSON.stringify({ message: "Find me the cheapest 2-person tent you can and buy it." }) })).text();
   const before = await (await api("/api/state")).json();
