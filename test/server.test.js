@@ -105,9 +105,15 @@ test("responses carry security headers and a CSP without inline scripts", async 
   assert.equal(res.headers.get("x-content-type-options"), "nosniff");
   assert.equal(res.headers.get("x-frame-options"), "DENY");
   const csp = res.headers.get("content-security-policy");
-  assert.match(csp, /script-src 'self' https:\/\/cdn\.jsdelivr\.net https:\/\/\*\.paypal\.com/);
+  assert.match(csp, /script-src 'self' 'nonce-[A-Za-z0-9+\/=]+' https:\/\/cdn\.jsdelivr\.net https:\/\/\*\.paypal\.com/);
   assert.doesNotMatch(csp.split(";").find((d) => d.includes("script-src")), /unsafe-inline/);
-  assert.ok(!(await res.text()).match(/<script>(?!<\/script>)/), "no inline <script> blocks");
+  const html = await res.text();
+  assert.ok(!html.match(/<script>(?!<\/script>)/), "no inline <script> blocks");
+  // The page carries this response's nonce for the PayPal SDK, and it changes per request.
+  const nonce = /'nonce-([^']+)'/.exec(csp)[1];
+  assert.ok(html.includes(`content="${nonce}"`));
+  const again = (await fetch(BASE + "/")).headers.get("content-security-policy");
+  assert.notEqual(/'nonce-([^']+)'/.exec(again)[1], nonce);
   assert.equal(res.headers.get("x-powered-by"), null);
 });
 

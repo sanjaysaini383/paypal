@@ -1,14 +1,17 @@
 // HTTP hardening shared by every route: security headers, a same-origin
 // check on state-changing API calls, write rate limits and error responses
 // that never leak stack traces.
+import crypto from "node:crypto";
 
 // PayPal's JS SDK loads from *.paypal.com, renders its buttons in PayPal
-// iframes and pulls assets from *.paypalobjects.com. Nothing else is
-// allowed to run scripts on the page. CSP=off disables it (debugging only).
+// iframes and pulls assets from *.paypalobjects.com. Its own inline scripts
+// (prerender and popup frames) are allowed through a per-response nonce,
+// which the page hands to the SDK as data-csp-nonce (PayPal's documented
+// CSP mechanism). Nothing else may run scripts. CSP=off disables it.
 const PAYPAL = "https://*.paypal.com https://*.paypalobjects.com";
-const CSP = [
+const csp = (nonce) => [
   "default-src 'self'",
-  `script-src 'self' https://cdn.jsdelivr.net ${PAYPAL}`,
+  `script-src 'self' 'nonce-${nonce}' https://cdn.jsdelivr.net ${PAYPAL}`,
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' data: https://fonts.gstatic.com",
   `img-src 'self' data: blob: ${PAYPAL}`,
@@ -28,7 +31,8 @@ export function securityHeaders(req, res, next) {
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-  if (process.env.CSP !== "off") res.setHeader("Content-Security-Policy", CSP);
+  res.locals.cspNonce = crypto.randomBytes(16).toString("base64");
+  if (process.env.CSP !== "off") res.setHeader("Content-Security-Policy", csp(res.locals.cspNonce));
   if (req.path.startsWith("/api/")) res.setHeader("Cache-Control", "no-store");
   next();
 }

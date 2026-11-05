@@ -922,6 +922,12 @@ const paypalWaiters = [];
 function loadPayPalSdk() {
   const s = document.createElement("script");
   s.src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(config.paypalClientId)}&currency=USD&intent=capture&components=buttons`;
+  // The server's CSP allows the SDK's own inline scripts through this nonce.
+  const nonce = document.querySelector('meta[name="csp-nonce"]')?.content;
+  if (nonce && !nonce.startsWith("__")) {
+    s.nonce = nonce;
+    s.setAttribute("data-csp-nonce", nonce);
+  }
   // Sandbox only: show the US checkout everywhere, so testers outside the US
   // (e.g. India, where PayPal blocks domestic payments) get the same flow.
   if (config.paypalMode === "sandbox") s.src += "&buyer-country=US";

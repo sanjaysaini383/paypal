@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import path from "node:path";
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { getSession, audit, spentThisMonth, categorySpendThisMonth, remember, setPolicy } from "./store.js";
 import { sanitizePolicy, applyPolicyChanges, diffPolicies, policyImpact } from "./policy.js";
@@ -35,7 +36,13 @@ app.post("/api/webhooks/paypal", express.raw({ type: () => true, limit: "256kb" 
 });
 
 app.use(express.json({ limit: "32kb" }));
-app.use(express.static(path.join(here, "..", "public")));
+// The page is templated with this response's CSP nonce (for the PayPal SDK).
+const INDEX = fs.readFileSync(path.join(here, "..", "public", "index.html"), "utf8");
+app.get(["/", "/index.html"], (req, res) => {
+  res.type("html").setHeader("Cache-Control", "no-store");
+  res.send(INDEX.replaceAll("__CSP_NONCE__", res.locals.cspNonce));
+});
+app.use(express.static(path.join(here, "..", "public"), { index: false }));
 
 // Session id comes from the browser (random UUID kept in localStorage). It is
 // the bearer secret for that session, so short, guessable ids are refused
