@@ -10,7 +10,8 @@ export function createDemo(ctx) {
   };
 
   function progress(s) {
-    const plan = [...(s?.transcript || [])].reverse().find((e) => e.role === "plan" && e.plan?.feasible)?.plan;
+    // Scenario 1 is the camping plan specifically (later purchases mustn't reset it).
+    const plan = [...(s?.transcript || [])].reverse().find((e) => e.role === "plan" && e.plan?.feasible && e.plan.items.some((i) => i.sku.startsWith("OUT-TENT")))?.plan;
     const injection = s?.riskEvents?.find((e) => e.signals?.some((x) => x.id === "prompt_injection"));
     const auth = plan && s.authorizations?.find((a) => a.cartId === plan.cart_id);
     const order = auth && s.orders.find((o) => o.authorizationId === auth.id);
