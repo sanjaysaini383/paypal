@@ -40,3 +40,46 @@ Baseline: `npm test` → **18/18 passing** (Node 24, offline agent, simulated Pa
 5. **Agent** (F9, F10): server-enforced purchase intent, schema validation, a budget optimizer tool for multi-item plans.
 6. **Financial control center** (F13): a server-side analytics API with filters, plus AG Grid ledger, detail view and CSV export.
 7. **HTTP hardening** (F8, F12, F14).
+
+## Resolution
+
+Status after Phases 2–7. Tests went from 18 to 98, all passing, and `npm audit` reports 0 vulnerabilities.
+
+| # | Status | How | Commit |
+|---|---|---|---|
+| F1 | Fixed | Capture fetches the PayPal order and compares amount, breakdown, items, currency, `custom_id` and payee with a signed snapshot; the captured amount is checked afterwards (a mismatch raises an integrity alert, never hidden). | 7dec787 |
+| F2 | Fixed | The full policy is re-evaluated at capture; a tightened rule revokes the authorization. | 7dec787 |
+| F3 | Fixed | `PENDING` captures are recorded as pending, count against the budget, can't be retried, and are settled or denied by webhooks. | 7dec787, 55d9456 |
+| F4 | Fixed | Purchase authorization engine: HMAC-SHA256 over canonical JSON, deep-frozen, single-use, expiring, bound to one PayPal order and payee. | 7dec787 |
+| F5 | Fixed | Per-order refund lock taken before the PayPal call; parallel duplicates are tested. | 690e0e7 |
+| F6 | Fixed | `TAX_RATE` used; refunds computed from the authorized snapshot; `PENDING` refunds not credited until they complete. | 690e0e7 |
+| F7 | Fixed | Verified webhooks with de-duplication, monotonic reconciliation and deferral of early events. | 55d9456 |
+| F8 | Fixed | Live, sandbox and simulated modes are distinguished; live requires `PAYPAL_ALLOW_LIVE=1`; the UI and every record show the payment rail. | 7dec787, 9ef1149 |
+| F9 | Fixed | Checkout requires the user's own purchase request (server-side), or an auto-approve threshold the user set. | d295ab4 |
+| F10 | Fixed | JSON-schema validation of every tool call. | d295ab4 |
+| F11 | Fixed | Explainable risk engine (observed vs inferred signals), enforced through the `blockHighRisk` policy rule. | 48e1cea |
+| F12 | Fixed | CSP with a per-response nonce (PayPal SDK verified in the real sandbox), origin check, write limits, JSON errors, stronger session ids. | bd53229, eba7ac5 |
+| F13 | Fixed | Server-side analytics API and the control center (AG Grid ledger, risk register, audit log; AG Charts). | e5f74e6, 4126b6c |
+| F14 | Fixed | `npm audit fix`. | 409e83f |
+
+### Verified against the real PayPal sandbox
+
+- Order creation.
+- The field-by-field comparison on real create and get responses.
+- Capture refused while the order is `CREATED`.
+- Smart Buttons rendering under the CSP with no violations.
+
+### Not verified here
+
+These need a human or a public URL:
+
+- Clicking through the sandbox approval popup end to end.
+- Receiving real webhook deliveries.
+
+Both code paths are covered by the fake-PayPal tests.
+
+### Remaining limitations
+
+- Sessions are bearer ids held in the browser and a local JSON file, not user accounts or a database. On serverless hosts, instances don't share memory.
+- Catalog, merchant registry and risk inputs are demo data; the risk score is a documented heuristic.
+- PayPal Vault (pre-approved purchases without a popup) is not implemented.
