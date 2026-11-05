@@ -2,6 +2,7 @@
 // AG Grid activity tables. Motion (motion.dev) drives the animations and
 // Lucide provides icons; both degrade gracefully if their CDN fails.
 import { createControlCenter } from "./control-center.js";
+import { createDemo } from "./demo.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const CATEGORIES = ["outdoor", "electronics", "home", "grocery", "gift_cards", "books"];
@@ -111,6 +112,7 @@ async function boot() {
   $("#wallet-period").textContent = new Date().toLocaleString("en-US", { month: "long", year: "numeric" });
 
   controlCenter.init();
+  demo.init();
   await refresh();
   renderHistory(state.transcript);
   if (config.paypalMode === "sandbox" || config.paypalMode === "live") loadPayPalSdk();
@@ -125,7 +127,7 @@ function renderModes() {
   }[config.paypalMode] || ["sim", "circle-help", config.paypalMode, ""];
   const ai = config.aiMode === "offline" ? ["Offline planner", "Rule-based planner driving the same tools (no AI key configured)."] : [`${config.aiMode} · ${config.model}`, "LLM agent with tool use."];
   $("#modes").innerHTML = `
-    <span class="mode ${pay[0]}" title="${esc(pay[3])}">${icon(pay[1])}${esc(pay[2])}</span>
+    <span class="mode ${pay[0]}" title="${esc(pay[3])}" aria-label="${esc(pay[2])}">${icon(pay[1])}<span class="mode-text">${esc(pay[2])}</span></span>
     <span class="mode ai" title="${esc(ai[1])}">${icon("bot")}${esc(ai[0])}</span>
     ${config.webhooks ? `<span class="mode ok" title="PayPal webhooks are verified and reconciled">${icon("webhook")}Webhooks</span>` : ""}`;
   refreshIcons();
@@ -446,14 +448,22 @@ function render() {
   if (!form.contains(document.activeElement)) {
     for (const k of ["monthlyBudget", "perOrderLimit", "maxItemPrice", "minMerchantRating"]) form.elements[k].value = p[k];
     form.elements.requireVerifiedMerchants.checked = p.requireVerifiedMerchants;
+    form.elements.blockHighRisk.checked = p.blockHighRisk !== false;
+    form.elements.autoApproveBelow.value = p.autoApproveBelow ?? 0;
     for (const cb of form.querySelectorAll("#cat-checks input")) cb.checked = p.blockedCategories.includes(cb.value);
   }
 
+  $("#policy-version").textContent = `Policy v${state.policyVersion || 1} · ${(state.policyHistory || []).length ? `${state.policyHistory.length} recorded change${state.policyHistory.length === 1 ? "" : "s"}` : "no changes yet"}`;
+  $("#policy-history-list").innerHTML = [...(state.policyHistory || [])]
+    .reverse()
+    .map((h) => `<li><b>v${h.version}</b> <span class="muted">${esc(h.by)} · ${esc(new Date(h.at).toLocaleString())}</span><small>${esc(h.detail || "")}</small></li>`)
+    .join("");
   const limitCount = Object.keys(p.categoryLimits || {}).length;
   if (limitCount) $("#policy-summary").textContent += ` · ${limitCount} category limit${limitCount === 1 ? "" : "s"}`;
   renderLimits();
   renderCart();
   controlCenter.update();
+  demo.render();
 }
 
 // ------------------------------------------------------------------ chat
@@ -935,22 +945,54 @@ $("#policy-toggle").addEventListener("click", (e) => {
   if (open) enter([...$("#policy").children], { stagger: 0.03, y: 4, duration: 0.25 });
 });
 
-$("#policy").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const f = e.target.elements;
-  const body = {
+// Saving is two steps: the server previews the exact diff and its
+// consequences, and nothing changes until the user confirms.
+function policyFormBody() {
+  const f = $("#policy").elements;
+  return {
     monthlyBudget: Number(f.monthlyBudget.value),
     perOrderLimit: Number(f.perOrderLimit.value),
     maxItemPrice: Number(f.maxItemPrice.value),
     minMerchantRating: Number(f.minMerchantRating.value),
+    autoApproveBelow: Number(f.autoApproveBelow.value),
     requireVerifiedMerchants: f.requireVerifiedMerchants.checked,
+    blockHighRisk: f.blockHighRisk.checked,
     blockedCategories: [...document.querySelectorAll("#cat-checks input:checked")].map((c) => c.value),
   };
-  const res = await api("/api/policy", { method: "PUT", body: JSON.stringify(body) });
-  state = await res.json();
-  document.activeElement?.blur();
-  render();
-  toast("ok", "Spending rules saved", "The agent will follow them from its next step.");
+}
+
+function closePolicyConfirm() {
+  $("#policy-confirm").hidden = true;
+  $("#policy-confirm").innerHTML = "";
+  $("#policy-save").hidden = false;
+}
+
+$("#policy").addEventListener("input", closePolicyConfirm);
+$("#policy").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const body = policyFormBody();
+  const res = await api("/api/policy/preview", { method: "POST", body: JSON.stringify(body) });
+  const preview = await res.json().catch(() => ({}));
+  if (!res.ok) return toast("bad", "Couldn't check those rules", preview.error || "");
+  if (!preview.diff.length) return toast("info", "Nothing to save", "These are already your rules.");
+  const box = $("#policy-confirm");
+  box.innerHTML = `
+    <strong>${icon("git-compare")}Review: policy v${preview.version} → v${preview.version + 1}</strong>
+    <ul class="diff">${preview.diff.map((d) => `<li><span class="d-label">${esc(d.label)}</span><span class="d-from">${esc(d.from)}</span>${icon("arrow-right")}<span class="d-to">${esc(d.to)}</span></li>`).join("")}</ul>
+    <div class="impact"><span class="impact-title">${icon("radar")}What this would do</span><ul>${preview.impact.map((i) => `<li class="${esc(i.kind)}">${icon({ tighten: "lock", loosen: "lock-open", warning: "triangle-alert", info: "info" }[i.kind] || "info")}<span>${esc(i.text)}</span></li>`).join("")}</ul></div>
+    <div class="row-btns"><button type="button" class="btn btn-primary" id="policy-apply">${icon("check")}Confirm and save</button><button type="button" class="btn btn-secondary" id="policy-cancel">Keep editing</button></div>`;
+  box.hidden = false;
+  $("#policy-save").hidden = true;
+  refreshIcons();
+  $("#policy-cancel").onclick = closePolicyConfirm;
+  $("#policy-apply").onclick = async () => {
+    const saved = await api("/api/policy", { method: "PUT", body: JSON.stringify(body) });
+    state = await saved.json();
+    closePolicyConfirm();
+    document.activeElement?.blur();
+    render();
+    toast("ok", `Spending rules saved · v${state.policyVersion}`, "Enforced on the server from the agent's next step, and re-checked at every capture.");
+  };
 });
 
 // ------------------------------------------------------------------ control center
@@ -1009,5 +1051,7 @@ const controlCenter = createControlCenter({
 function applyGridTheme() {
   controlCenter.applyTheme();
 }
+
+const demo = createDemo({ $, esc, icon, refreshIcons, getState: () => state, getConfig: () => config, send: (text) => send(text), controlCenter, isBusy: () => busy });
 
 boot();

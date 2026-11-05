@@ -3,7 +3,7 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getSession, audit, spentThisMonth, categorySpendThisMonth, remember, setPolicy } from "./store.js";
-import { sanitizePolicy, applyPolicyChanges } from "./policy.js";
+import { sanitizePolicy, applyPolicyChanges, diffPolicies, policyImpact } from "./policy.js";
 import { runAgent, aiMode, MODEL } from "./agent.js";
 import { editCart } from "./tools.js";
 import * as paypal from "./paypal.js";
@@ -192,10 +192,21 @@ app.post("/api/chat", async (req, res) => {
 
 app.put("/api/policy", (req, res) => {
   const s = session(req);
-  setPolicy(s, sanitizePolicy(req.body || {}, s.policy), "user", "Edited in the rules panel");
+  const before = s.policy;
+  const next = sanitizePolicy(req.body || {}, s.policy);
+  const diff = diffPolicies(before, next);
+  if (!diff.length) return res.json(snapshot(s));
+  setPolicy(s, next, "user", diff.map((d) => `${d.label}: ${d.from} → ${d.to}`).join("; "));
   audit(s, "user", "policy_updated", `v${s.policyVersion}: budget $${s.policy.monthlyBudget}/mo, $${s.policy.perOrderLimit}/order, $${s.policy.maxItemPrice}/item`);
   s.pendingEvents.push(`The user updated their spending policy: ${JSON.stringify(s.policy)}`);
   res.json(snapshot(s));
+});
+
+// What saving the rules form would change, before anything is saved.
+app.post("/api/policy/preview", (req, res) => {
+  const s = session(req);
+  const next = sanitizePolicy(req.body || {}, s.policy);
+  res.json({ version: s.policyVersion, diff: diffPolicies(s.policy, next), impact: policyImpact(s, s.policy, next) });
 });
 
 // Rule changes the agent proposed only take effect when the user applies them.

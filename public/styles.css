@@ -723,3 +723,56 @@ a { color: var(--accent-text); }
 .json { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .audit-detail { margin: 0; font-size: 13.5px; line-height: 1.5; }
 .small { font-size: 12px; }
+
+/* ------------------------------------------------------------------ policy manager */
+.field-help { font-weight: 400; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+.policy-confirm { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 12px; background: var(--accent-soft); }
+.policy-confirm > strong { display: flex; align-items: center; gap: 7px; font-size: 13px; }
+.policy-confirm > strong .lucide { width: 14px; height: 14px; color: var(--accent-text); }
+.policy-confirm .diff { padding: 0; }
+.policy-confirm .impact { padding: 0; }
+.policy-confirm .impact li, .policy-confirm .diff li { background: var(--surface); }
+.policy-confirm .row-btns { display: flex; gap: 8px; }
+.policy-confirm .row-btns .btn { flex: 1; }
+.policy-history { font-size: 12.5px; }
+.policy-history summary { display: flex; align-items: center; gap: 7px; cursor: pointer; color: var(--muted); list-style: none; }
+.policy-history summary::-webkit-details-marker { display: none; }
+.policy-history summary .lucide { width: 14px; height: 14px; }
+.policy-history ol { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow: auto; }
+.policy-history li { padding: 6px 8px; border-radius: 8px; background: var(--surface-2); }
+.policy-history li small { display: block; color: var(--text-2); }
+
+/* ------------------------------------------------------------------ guided demo */
+.demo-panel { position: fixed; right: 20px; bottom: 20px; z-index: 40; width: min(380px, calc(100vw - 32px)); max-height: calc(100vh - 100px); display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow-lg); overflow: hidden; }
+.demo-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.demo-head strong { display: block; font-size: 14px; }
+.demo-head small { display: block; font-size: 11.5px; color: var(--muted); }
+.demo-steps { list-style: none; margin: 0; padding: 8px 10px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.demo-group { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding: 10px 6px 4px; }
+.demo-step { display: grid; grid-template-columns: 20px 1fr auto; gap: 10px; align-items: start; padding: 8px 6px; border-radius: 10px; }
+.demo-step.next { background: var(--accent-soft); }
+.demo-check .lucide { width: 18px; height: 18px; color: var(--border-strong); margin-top: 1px; }
+.demo-step.done .demo-check .lucide { color: var(--ok); }
+.demo-step.next .demo-check .lucide { color: var(--accent-text); }
+.demo-text b { display: block; font-size: 12.5px; font-weight: 600; }
+.demo-text small { display: block; font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+.demo-step.done .demo-text b { color: var(--text-2); }
+.demo-foot { padding: 8px 10px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; }
+@media (max-width: 640px) { .demo-panel { right: 16px; left: 16px; width: auto; bottom: 16px; max-height: 60vh; } }
+
+@media (max-width: 560px) {
+  .mode-text, #reset-btn span { display: none; }
+  .mode { padding: 0 8px; }
+  .top-actions .btn { padding: 0 10px; }
+}
+
+/* ------------------------------------------------------------------ workspace layout */
+/* Chat + side column share their own grid so the sticky chat stays within it. */
+.layout { grid-template-columns: minmax(0, 1fr); grid-template-areas: "work" "activity"; }
+@media (max-width: 1024px) { .layout { grid-template-areas: "work" "activity"; } }
+.workspace { grid-area: work; display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr) 380px; align-items: start; min-width: 0; }
+.workspace > .chat, .workspace > .side { grid-area: auto; }
+@media (max-width: 1024px) { .workspace { grid-template-columns: minmax(0, 1fr); gap: 16px; } }
+/* Desktop: keep the conversation in view while the side column scrolls. */
+@media (min-width: 1025px) { .workspace > .chat { position: sticky; top: 80px; } }
+.policy-confirm .row-btns { flex-direction: column; }

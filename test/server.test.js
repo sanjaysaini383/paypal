@@ -164,3 +164,17 @@ test("the user can preview and issue a line refund from the ledger", async () =>
   assert.equal((await api(sid, `/api/orders/${orderId}/refunds`, { method: "POST", body: JSON.stringify({ skus: [sku] }) })).status, 409, "no double refund");
   assert.equal((await api("test_ledger_refund_thief", `/api/orders/${orderId}/refunds`, { method: "POST", body: "{}" })).status, 404, "other sessions can't refund it");
 });
+
+test("the rules form previews the diff and consequences before saving", async () => {
+  const sid = "test_policy_preview_sess";
+  const before = await (await api(sid, "/api/state")).json();
+  const preview = await (await api(sid, "/api/policy/preview", { method: "POST", body: JSON.stringify({ ...before.policy, blockHighRisk: false, autoApproveBelow: 25 }) })).json();
+  assert.deepEqual(preview.diff.map((d) => d.label).sort(), ["Block high-risk listings", "Checkout without asking"]);
+  assert.ok(preview.impact.some((i) => i.kind === "warning"));
+  let st = await (await api(sid, "/api/state")).json();
+  assert.equal(st.policyVersion, before.policyVersion, "preview changes nothing");
+  st = await (await api(sid, "/api/policy", { method: "PUT", body: JSON.stringify({ ...before.policy, autoApproveBelow: 25 }) })).json();
+  assert.equal(st.policy.autoApproveBelow, 25);
+  assert.equal(st.policyVersion, before.policyVersion + 1);
+  assert.match(st.policyHistory.at(-1).detail, /Checkout without asking: Always ask → Up to \$25/);
+});
